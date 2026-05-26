@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.tgz
+.DS_Store
+
+.firecrawl/
+*.har
+*.har.gz
+*.trace
+*.trace.json
+storage-state.json
+cookies.txt
+cookies.json
+*.session.json
+coverage/
+.next/

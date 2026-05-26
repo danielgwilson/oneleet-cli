@@ -1,0 +1,18 @@
+title = "oneleet-cli gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "oneleet-app-cookie"
+description = "Detected a possible Oneleet session cookie."
+regex = '''\boneleet-app=([A-Za-z0-9._~+/=-]{16,})'''
+secretGroup = 1
+keywords = ["oneleet-app"]
+
+[[rules]]
+id = "oneleet-cookie-env"
+description = "Detected a possible Oneleet session cookie environment value."
+regex = '''\bONELEET_APP_COOKIE=([A-Za-z0-9._~+/=-]{16,})'''
+secretGroup = 1
+keywords = ["ONELEET_APP_COOKIE"]
