@@ -30,10 +30,10 @@ The package also includes GitHub Actions workflows:
 - `.github/workflows/ci.yml` runs gitleaks, tracked-capture checks, and the
   release gate on Node 22 and 24 for pull requests, pushes to `main`, and
   manual dispatch.
-- `.github/workflows/publish.yml` is manual-only. It defaults to
-  `npm publish --dry-run` and requires setting `dry_run=false` before publishing.
-  Configure `NPM_TOKEN` or npm trusted publishing before using the real publish
-  step.
+- `.github/workflows/publish.yml` can publish on `v*` tags or by manual
+  dispatch. Manual dispatch defaults to `npm publish --dry-run` and requires
+  setting `dry_run=false` before publishing. Configure `NPM_TOKEN` before using
+  the real publish step.
 
 The package name `oneleet-cli` was checked against npm on 2026-05-21 and was not
 registered at that time. Re-check immediately before the first publish.
