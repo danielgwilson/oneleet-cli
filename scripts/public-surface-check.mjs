@@ -16,10 +16,10 @@ const requiredPackagedPaths = [
   "CONTRIBUTING.md",
   "SECURITY.md",
   "dist/cli.js",
+  "SKILL.md",
   "docs/CONTRACT_V1.md",
   "docs/COVERAGE.md",
   "docs/PUBLISHING.md",
-  "skills/oneleet/SKILL.md",
   "package.json",
 ];
 

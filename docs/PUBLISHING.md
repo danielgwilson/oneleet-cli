@@ -56,13 +56,12 @@ Expected npm tarball contents:
 
 - `dist/`
 - `docs/`
-- `skills/`
+- `SKILL.md`
 - `README.md`
 - `CONTRIBUTING.md`
 - `SECURITY.md`
 - `LICENSE`
 - `package.json`
-- `skills/oneleet/SKILL.md`
 
 Tests, scripts, `src/`, `node_modules/`, local reports, browser captures, and auth material must not be included in the tarball.
 

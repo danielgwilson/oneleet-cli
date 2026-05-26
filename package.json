@@ -20,7 +20,7 @@
   "files": [
     "dist",
     "docs",
-    "skills",
+    "SKILL.md",
     "README.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
