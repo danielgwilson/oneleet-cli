@@ -15,7 +15,6 @@ const requiredPackagedPaths = [
   "README.md",
   "CONTRIBUTING.md",
   "SECURITY.md",
-  "SKILL.md",
   "dist/cli.js",
   "docs/CONTRACT_V1.md",
   "docs/COVERAGE.md",
