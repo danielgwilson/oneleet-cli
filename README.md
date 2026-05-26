@@ -26,11 +26,17 @@ npm run build
 node dist/cli.js --help
 ```
 
-Published package install, once the first release is intentionally published:
+Published package install:
 
 ```bash
 npm install -g oneleet-cli
 oneleet --help
+```
+
+Skill install:
+
+```bash
+npx -y skills add -g danielgwilson/oneleet-cli --skill oneleet
 ```
 
 One-off run:
