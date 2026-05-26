@@ -1,6 +1,6 @@
 {
   "name": "oneleet-cli",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Agent-first private-surface CLI for Oneleet read workflows",
   "license": "MIT",
   "author": "Daniel G Wilson",
