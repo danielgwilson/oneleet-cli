@@ -5,15 +5,6 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Run npm publish in dry-run mode
-        required: true
-        default: "true"
-        type: choice
-        options:
-          - "true"
-          - "false"
 
 permissions:
   contents: read
@@ -39,6 +30,7 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+          cache: npm
 
       - name: Install
         run: npm ci
@@ -46,10 +38,5 @@ jobs:
       - name: Check release surface
         run: npm run check:release
 
-      - name: Dry-run publish
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == 'true' }}
-        run: npm publish --dry-run --access public
-
       - name: Publish
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == 'false') }}
         run: npm publish --access public
