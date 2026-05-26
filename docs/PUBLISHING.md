@@ -32,8 +32,8 @@ The package also includes GitHub Actions workflows:
   manual dispatch.
 - `.github/workflows/publish.yml` can publish on `v*` tags or by manual
   dispatch. Manual dispatch defaults to `npm publish --dry-run` and requires
-  setting `dry_run=false` before publishing. Configure `NPM_TOKEN` before using
-  the real publish step.
+  setting `dry_run=false` before publishing. The real publish step expects npm
+  trusted publishing/OIDC for `danielgwilson/oneleet-cli` and `publish.yml`.
 
 The package name `oneleet-cli` was checked against npm on 2026-05-21 and was not
 registered at that time. Re-check immediately before the first publish.
