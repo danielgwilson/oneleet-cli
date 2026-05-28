@@ -13,7 +13,7 @@ can drift when Oneleet changes the app.
 - current user and tenant reads
 - dashboard, HIPAA aggregate report, controls, monitors, evidence, policies, frameworks, people, vendors, domains, integrations, access reviews, risk assessments, security training, trust center, reports, pentests, code security, and attack-surface reads
 - guarded evidence writes for uploading file evidence to controls and linking existing evidence to controls or vendors
-- guarded risk reads/updates for assessment triage
+- guarded risk reads/updates, control links, and archive/unarchive actions for assessment triage
 - read-only `/api/v1/...` escape hatch for uncovered Oneleet private API paths
 
 Mutations are limited to explicit workflow commands that are dry-run by default
@@ -125,6 +125,11 @@ oneleet risk-assessments list --json
 oneleet risks get <risk-id> --json
 oneleet risks update <risk-id> --response MITIGATE --response-details "Mitigation summary" --json
 oneleet risks update <risk-id> --response MITIGATE --response-details "Mitigation summary" --write --confirm <risk-id> --json
+oneleet risks controls <risk-id> --control-title "Audit logs collected" --json
+oneleet risks controls <risk-id> --control-title "Audit logs collected" --write --confirm <risk-id> --json
+oneleet risks archive <risk-id> --json
+oneleet risks archive <risk-id> --write --confirm <risk-id> --json
+oneleet risks unarchive <risk-id> --write --confirm <risk-id> --json
 oneleet security-training modules --json
 oneleet security-training progress --json
 oneleet security-training progress --raw --json
@@ -168,10 +173,10 @@ control or vendor evidence without hand-clicking through Oneleet. Upload is
 dry-run by default:
 
 ```bash
-oneleet evidence upload ./Legion_HIPAA_BAA_Register_2026-05-28.csv \
-  --control-id <business-associate-agreements-managed-control-id> \
-  --link-control-id <business-associate-agreements-with-subcontractors-control-id> \
-  --link-control-id <vendor-management-control-id> \
+oneleet evidence upload ./control-evidence.csv \
+  --control-id <primary-control-id> \
+  --link-control-id <additional-control-id> \
+  --link-control-id <another-control-id> \
   --reuse-existing-name \
   --json
 ```
@@ -179,13 +184,13 @@ oneleet evidence upload ./Legion_HIPAA_BAA_Register_2026-05-28.csv \
 To write, repeat the command with the generated confirmation string:
 
 ```bash
-oneleet evidence upload ./Legion_HIPAA_BAA_Register_2026-05-28.csv \
-  --control-id <business-associate-agreements-managed-control-id> \
-  --link-control-id <business-associate-agreements-with-subcontractors-control-id> \
-  --link-control-id <vendor-management-control-id> \
+oneleet evidence upload ./control-evidence.csv \
+  --control-id <primary-control-id> \
+  --link-control-id <additional-control-id> \
+  --link-control-id <another-control-id> \
   --reuse-existing-name \
   --write \
-  --confirm Legion_HIPAA_BAA_Register_2026-05-28.csv \
+  --confirm control-evidence.csv \
   --json
 ```
 
@@ -194,6 +199,46 @@ Existing evidence can be linked without re-uploading:
 ```bash
 oneleet evidence link-control <evidence-id> --control-id <control-id> --write --confirm <evidence-id> --json
 oneleet evidence link-vendor <evidence-id> --vendor-id <tenant-vendor-id> --write --confirm <evidence-id> --json
+```
+
+## Risk write workflow
+
+Risk writes are also dry-run first. Use `risks update` for risk text and
+response fields:
+
+```bash
+oneleet risks update <risk-id> \
+  --response MITIGATE \
+  --response-details "Mitigate through audit logging, access review, and incident response controls." \
+  --json
+```
+
+Control relationships can be managed by UUID or exact title. Title matching is
+case-insensitive and errors on ambiguity:
+
+```bash
+oneleet risks controls <risk-id> \
+  --control-title "Audit logs collected" \
+  --control-title "Access reviews performed" \
+  --json
+```
+
+To apply the relationship update:
+
+```bash
+oneleet risks controls <risk-id> \
+  --control-title "Audit logs collected" \
+  --control-title "Access reviews performed" \
+  --write \
+  --confirm <risk-id> \
+  --json
+```
+
+Risks that should not remain in the active assessment can be archived with the
+same guard:
+
+```bash
+oneleet risks archive <risk-id> --write --confirm <risk-id> --json
 ```
 
 ## Contract

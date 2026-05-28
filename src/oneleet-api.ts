@@ -143,6 +143,18 @@ export class OneleetApiClient {
     });
   }
 
+  async archiveRisk(riskId: string): Promise<unknown> {
+    return this.request(`/api/v1/risks/${requireId(riskId, "risk id")}/archive`, undefined, {
+      method: "POST",
+    });
+  }
+
+  async unarchiveRisk(riskId: string): Promise<unknown> {
+    return this.request(`/api/v1/risks/${requireId(riskId, "risk id")}/unarchive`, undefined, {
+      method: "POST",
+    });
+  }
+
   async listSecurityTrainingModules(tenantId = this.tenantId, includeDrafts?: boolean): Promise<Record<string, unknown> | unknown[]> {
     return this.request(`/api/v1/tenants/${requireTenantId(tenantId)}/security-training-modules`, { includeDrafts });
   }

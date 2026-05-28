@@ -5,6 +5,7 @@ import { importFromCdp, saveAndValidate, validateConfig } from "./auth.js";
 import { clearConfig, getDisplayConfigPath, resolveConfig } from "./config.js";
 import { buildHipaaReport, writeHipaaReportOutput, type HipaaReportOptions } from "./hipaa-report.js";
 import { codeError, makeError, ok, printJson } from "./output.js";
+import type { OneleetApiClient } from "./oneleet-api.js";
 import {
   buildCoverageCheck,
   buildSecurityRemediationQueue,
@@ -659,6 +660,70 @@ export function buildProgram(): Command {
         };
       }, opts);
     });
+  risks
+    .command("controls")
+    .description("Link or unlink controls on a risk. Dry-run by default; real writes require --write and --confirm <risk-id>.")
+    .argument("<risk-id>", "Risk UUID")
+    .option("--tenant-id <id>", "Tenant id override")
+    .option("--control-id <id>", "Control UUID to link; repeatable", collect, [])
+    .option("--control-title <title>", "Exact control title to link; repeatable", collect, [])
+    .option("--unlink-control-id <id>", "Control UUID to unlink; repeatable", collect, [])
+    .option("--unlink-control-title <title>", "Exact control title to unlink; repeatable", collect, [])
+    .option("--write", "Perform the link/unlink writes. Without this flag, prints a dry-run preview only.")
+    .option("--confirm <risk-id>", "Required with --write; must equal the risk id being updated")
+    .option("--json", "Print JSON envelope")
+    .action(async (riskId: string, opts: RiskControlsOptions) => {
+      await runJsonAction(async () => {
+        const config = await requireConfig(opts);
+        const tenantId = tenantIdFor(opts, config);
+        const client = clientFor(config);
+        const before = await client.getRisk(riskId);
+        const controls = await resolveRiskControlActions(client, tenantId, opts);
+        if (controls.length === 0) throw codeError("VALIDATION", "No control link/unlink fields provided.");
+        const patch = { controls: controls.map(({ controlId, link }) => ({ controlId, link })) };
+        if (!opts.write) {
+          return {
+            dryRun: true,
+            writeRequired: "--write --confirm " + riskId,
+            riskId,
+            before: sanitizeRisk(before),
+            patch,
+            resolvedControls: controls,
+          };
+        }
+        if (opts.confirm !== riskId) throw codeError("VALIDATION", "--write requires --confirm to exactly match the risk id.");
+        await client.updateRisk(riskId, patch);
+        const after = await client.getRisk(riskId);
+        return {
+          dryRun: false,
+          riskId,
+          patch,
+          resolvedControls: controls,
+          before: sanitizeRisk(before),
+          after: sanitizeRisk(after),
+        };
+      }, opts);
+    });
+  risks
+    .command("archive")
+    .description("Archive a risk. Dry-run by default; real writes require --write and --confirm <risk-id>.")
+    .argument("<risk-id>", "Risk UUID")
+    .option("--write", "Perform the archive. Without this flag, prints a dry-run preview only.")
+    .option("--confirm <risk-id>", "Required with --write; must equal the risk id")
+    .option("--json", "Print JSON envelope")
+    .action(async (riskId: string, opts: RiskArchiveOptions) => {
+      await runJsonAction(async () => runRiskArchiveCommand(riskId, opts, "archive"), opts);
+    });
+  risks
+    .command("unarchive")
+    .description("Unarchive a risk. Dry-run by default; real writes require --write and --confirm <risk-id>.")
+    .argument("<risk-id>", "Risk UUID")
+    .option("--write", "Perform the unarchive. Without this flag, prints a dry-run preview only.")
+    .option("--confirm <risk-id>", "Required with --write; must equal the risk id")
+    .option("--json", "Print JSON envelope")
+    .action(async (riskId: string, opts: RiskArchiveOptions) => {
+      await runJsonAction(async () => runRiskArchiveCommand(riskId, opts, "unarchive"), opts);
+    });
   program.addCommand(risks);
   
   const training = new Command("security-training").description("Security training commands");
@@ -885,6 +950,27 @@ type RiskUpdateOptions = JsonOptions & {
   confirm?: string;
 };
 
+type RiskControlsOptions = TenantOptions & {
+  controlId?: string[];
+  controlTitle?: string[];
+  unlinkControlId?: string[];
+  unlinkControlTitle?: string[];
+  write?: boolean;
+  confirm?: string;
+};
+
+type RiskArchiveOptions = JsonOptions & {
+  write?: boolean;
+  confirm?: string;
+};
+
+type RiskControlAction = {
+  controlId: string;
+  title: string | null;
+  link: boolean;
+  source: string;
+};
+
 type EvidenceUploadOptions = TenantOptions & {
   controlId: string;
   linkControlId?: string[];
@@ -965,7 +1051,7 @@ function kebab(value: string): string {
 }
 
 function sanitizeRisk(value: unknown): Record<string, unknown> {
-  const row = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const row = unwrapData(value);
   return {
     id: row.id,
     title: row.title,
@@ -983,10 +1069,163 @@ function sanitizeRisk(value: unknown): Record<string, unknown> {
     controls: Array.isArray(row.controls)
       ? row.controls.map((control) => {
           const c = control && typeof control === "object" ? (control as Record<string, unknown>) : {};
-          return { title: c.title };
+          return {
+            id: typeof c.id === "string" ? c.id : null,
+            title: controlTitleOf(c),
+            status: typeof c.status === "string" ? c.status : null,
+          };
         })
       : [],
     updatedAt: row.updatedAt,
+  };
+}
+
+async function resolveRiskControlActions(
+  client: OneleetApiClient,
+  tenantId: string,
+  opts: RiskControlsOptions,
+): Promise<RiskControlAction[]> {
+  const actions: RiskControlAction[] = [];
+  for (const controlId of opts.controlId || []) {
+    addRiskControlAction(actions, {
+      controlId: requireUuid(controlId, "control id"),
+      title: null,
+      link: true,
+      source: "control-id",
+    });
+  }
+  for (const controlId of opts.unlinkControlId || []) {
+    addRiskControlAction(actions, {
+      controlId: requireUuid(controlId, "unlink control id"),
+      title: null,
+      link: false,
+      source: "unlink-control-id",
+    });
+  }
+
+  const linkTitles = opts.controlTitle || [];
+  const unlinkTitles = opts.unlinkControlTitle || [];
+  if (linkTitles.length || unlinkTitles.length) {
+    const controls = rowsOf(await client.listControls(tenantId));
+    for (const title of linkTitles) {
+      const control = resolveControlByTitle(controls, title, "--control-title");
+      addRiskControlAction(actions, {
+        controlId: control.controlId,
+        title: control.title,
+        link: true,
+        source: "control-title",
+      });
+    }
+    for (const title of unlinkTitles) {
+      const control = resolveControlByTitle(controls, title, "--unlink-control-title");
+      addRiskControlAction(actions, {
+        controlId: control.controlId,
+        title: control.title,
+        link: false,
+        source: "unlink-control-title",
+      });
+    }
+  }
+
+  return actions;
+}
+
+function addRiskControlAction(actions: RiskControlAction[], action: RiskControlAction): void {
+  const existing = actions.find((candidate) => candidate.controlId.toLowerCase() === action.controlId.toLowerCase());
+  if (existing && existing.link !== action.link) {
+    throw codeError("VALIDATION", `Control ${action.controlId} cannot be both linked and unlinked in the same command.`);
+  }
+  if (existing) return;
+  actions.push(action);
+}
+
+function resolveControlByTitle(
+  controls: unknown[],
+  requestedTitle: string,
+  flagName: string,
+): { controlId: string; title: string } {
+  const normalizedRequest = normalizeTitle(requestedTitle);
+  if (!normalizedRequest) throw codeError("VALIDATION", `${flagName} cannot be empty.`);
+  const matches = controls
+    .map((control) => (control && typeof control === "object" ? (control as Record<string, unknown>) : null))
+    .filter((control): control is Record<string, unknown> => Boolean(control))
+    .map((control) => ({ row: control, title: controlTitleOf(control) }))
+    .filter((control) => control.title && normalizeTitle(control.title) === normalizedRequest);
+
+  if (matches.length === 0) throw codeError("VALIDATION", `No control title matched "${requestedTitle}".`);
+  if (matches.length > 1) {
+    throw codeError("VALIDATION", `Control title "${requestedTitle}" matched ${matches.length} controls; use --control-id instead.`);
+  }
+  return {
+    controlId: stringField(matches[0].row, "id", "control id"),
+    title: matches[0].title || requestedTitle.trim(),
+  };
+}
+
+function normalizeTitle(value: string | null): string {
+  return (value || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function controlTitleOf(row: Record<string, unknown>): string | null {
+  if (typeof row.title === "string" && row.title.trim()) return row.title;
+  for (const key of ["controlType", "control", "metadata"]) {
+    const nested = row[key];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const title = (nested as Record<string, unknown>).title;
+      if (typeof title === "string" && title.trim()) return title;
+    }
+  }
+  return null;
+}
+
+async function runRiskArchiveCommand(riskId: string, opts: RiskArchiveOptions, action: "archive" | "unarchive"): Promise<Record<string, unknown>> {
+  requireUuid(riskId, "risk id");
+  const client = clientFor(await requireConfig(opts));
+  const before = await client.getRisk(riskId);
+  if (!opts.write) {
+    return {
+      dryRun: true,
+      writeRequired: "--write --confirm " + riskId,
+      riskId,
+      action,
+      before: sanitizeRisk(before),
+    };
+  }
+  if (opts.confirm !== riskId) throw codeError("VALIDATION", "--write requires --confirm to exactly match the risk id.");
+  const result = action === "archive" ? await client.archiveRisk(riskId) : await client.unarchiveRisk(riskId);
+  return {
+    dryRun: false,
+    riskId,
+    action,
+    result: summarizeMutationResult(result),
+    before: sanitizeRisk(before),
+    after: await getRiskAfterMutation(client, riskId),
+  };
+}
+
+async function getRiskAfterMutation(client: OneleetApiClient, riskId: string): Promise<Record<string, unknown>> {
+  try {
+    return sanitizeRisk(await client.getRisk(riskId));
+  } catch (error: any) {
+    const cliError = makeError(error);
+    return {
+      unavailable: true,
+      error: {
+        code: cliError.code,
+        message: cliError.message,
+      },
+    };
+  }
+}
+
+function summarizeMutationResult(value: unknown): Record<string, unknown> {
+  const row = unwrapData(value);
+  if (!Object.keys(row).length) return { ok: true };
+  return {
+    ok: true,
+    id: typeof row.id === "string" ? row.id : null,
+    archived: typeof row.archived === "boolean" ? row.archived : typeof row.isArchived === "boolean" ? row.isArchived : null,
+    status: typeof row.status === "string" ? row.status : null,
   };
 }
 
