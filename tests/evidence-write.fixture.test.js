@@ -18,12 +18,12 @@ const fakeCookie = "synthetic-cookie-do-not-leak";
 
 test("evidence upload is dry-run by default", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "oneleet-cli-evidence-dry-run-"));
-  const registerPath = path.join(tempDir, "baa-register.csv");
+  const evidencePath = path.join(tempDir, "control-evidence.csv");
 
   try {
-    await writeFile(registerPath, "vendor,baaStatus\nSynthetic Vendor,attached\n", "utf8");
+    await writeFile(evidencePath, "item,status\nSynthetic Item,attached\n", "utf8");
     const result = await runCli(
-      ["evidence", "upload", registerPath, "--control-id", primaryControlId, "--link-control-id", secondaryControlId, "--json"],
+      ["evidence", "upload", evidencePath, "--control-id", primaryControlId, "--link-control-id", secondaryControlId, "--json"],
       { PATH: process.env.PATH || "" },
     );
 
@@ -32,10 +32,10 @@ test("evidence upload is dry-run by default", async () => {
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.data.dryRun, true);
-    assert.equal(payload.data.upload.fileName, "baa-register.csv");
+    assert.equal(payload.data.upload.fileName, "control-evidence.csv");
     assert.equal(payload.data.upload.primaryControlId, primaryControlId);
     assert.deepEqual(payload.data.upload.additionalControlIds, [secondaryControlId]);
-    assert.match(payload.data.writeRequired, /--write --confirm baa-register\.csv/);
+    assert.match(payload.data.writeRequired, /--write --confirm control-evidence\.csv/);
     assert.equal(result.stdout.includes(fakeCookie), false);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -45,24 +45,24 @@ test("evidence upload is dry-run by default", async () => {
 test("evidence upload writes file evidence and links extra controls", async () => {
   const server = await startEvidenceServer();
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "oneleet-cli-evidence-write-"));
-  const registerPath = path.join(tempDir, "baa-register.csv");
+  const evidencePath = path.join(tempDir, "control-evidence.csv");
 
   try {
-    await writeFile(registerPath, "vendor,baaStatus\nSynthetic Vendor,attached\n", "utf8");
+    await writeFile(evidencePath, "item,status\nSynthetic Item,attached\n", "utf8");
     const result = await runCli(
       [
         "evidence",
         "upload",
-        registerPath,
+        evidencePath,
         "--control-id",
         primaryControlId,
         "--link-control-id",
         secondaryControlId,
         "--note",
-        "Synthetic register evidence",
+        "Synthetic control evidence",
         "--write",
         "--confirm",
-        "baa-register.csv",
+        "control-evidence.csv",
         "--json",
       ],
       fixtureEnv(server.url, tempDir),
@@ -73,7 +73,7 @@ test("evidence upload writes file evidence and links extra controls", async () =
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.data.dryRun, false);
-    assert.equal(payload.data.evidence.fileName, "baa-register.csv");
+    assert.equal(payload.data.evidence.fileName, "control-evidence.csv");
     assert.equal(payload.data.evidence.controlCount, 2);
     assert.deepEqual(payload.data.evidence.controlIds.sort(), [primaryControlId, secondaryControlId].sort());
     assert.deepEqual(
@@ -85,8 +85,8 @@ test("evidence upload writes file evidence and links extra controls", async () =
       `POST /api/v1/evidence/${evidenceId}/link`,
       `GET /api/v1/evidence/${evidenceId}`,
     ]);
-    assert.equal(server.uploadBody.includes("baa-register.csv"), true);
-    assert.equal(server.uploadBody.includes("Synthetic register evidence"), true);
+    assert.equal(server.uploadBody.includes("control-evidence.csv"), true);
+    assert.equal(server.uploadBody.includes("Synthetic control evidence"), true);
     assert.equal(result.stdout.includes(fakeCookie), false);
   } finally {
     await server.close();
@@ -145,7 +145,7 @@ async function startEvidenceServer() {
         data: {
           id: evidenceId,
           type: "FILE",
-          fileName: "baa-register.csv",
+          fileName: "control-evidence.csv",
           controlIds,
           vendorIds: [],
         },
@@ -166,7 +166,7 @@ async function startEvidenceServer() {
         data: {
           id: evidenceId,
           type: "FILE",
-          fileName: "baa-register.csv",
+          fileName: "control-evidence.csv",
           controlIds,
           vendorIds: [],
           updatedAt: "2026-05-28T00:00:00.000Z",
