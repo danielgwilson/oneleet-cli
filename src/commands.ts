@@ -514,6 +514,45 @@ export function buildProgram(): Command {
         .action(async (opts: JsonOptions) => {
           await runJsonAction(async () => clientFor(await requireConfig(opts)).listPolicyTypes(), opts);
         }),
+    )
+    .addCommand(
+      new Command("set-audience")
+        .description("Set a policy's signature audience. Dry-run by default; real writes require --write and --confirm <policy-id>.")
+        .argument("<policy-id>", "Policy UUID")
+        .option("--audience <value>", "Audience enum: EVERYONE, EMPLOYEES, CONTRACTORS, GROUPS")
+        .option("--group-id <id>", "Group UUID to include (only with --audience GROUPS); repeatable. Omit all to require no signers.", collect, [])
+        .option("--write", "Perform the update. Without this flag, prints a dry-run preview only.")
+        .option("--confirm <policy-id>", "Required with --write; must equal the policy id being updated")
+        .option("--json", "Print JSON envelope")
+        .action(async (policyId: string, opts: PolicySetAudienceOptions) => {
+          await runJsonAction(async () => {
+            const config = await requireConfig(opts);
+            const client = clientFor(config);
+            const before = unwrapData(await client.getPolicy(policyId));
+            const patch = buildPolicyAudiencePatch(opts);
+            if (!opts.write) {
+              return {
+                dryRun: true,
+                writeRequired: "--write --confirm " + policyId,
+                policyId,
+                before: sanitizePolicy(before),
+                patch,
+              };
+            }
+            if (opts.confirm !== policyId) {
+              throw codeError("VALIDATION", "--write requires --confirm to exactly match the policy id.");
+            }
+            await client.updatePolicy(policyId, patch);
+            const after = unwrapData(await client.getPolicy(policyId));
+            return {
+              dryRun: false,
+              policyId,
+              patch,
+              before: sanitizePolicy(before),
+              after: sanitizePolicy(after),
+            };
+          }, opts);
+        }),
     );
   
   program
@@ -870,6 +909,13 @@ export function buildProgram(): Command {
   return program;
 }
 
+type PolicySetAudienceOptions = JsonOptions & {
+  audience?: string;
+  groupId?: string[];
+  write?: boolean;
+  confirm?: string;
+};
+
 type RiskUpdateOptions = JsonOptions & {
   title?: string;
   description?: string;
@@ -917,6 +963,7 @@ type EvidenceUploadDescription = {
   contents: Uint8Array;
 };
 
+const ALLOWED_POLICY_AUDIENCES = new Set(["EVERYONE", "EMPLOYEES", "CONTRACTORS", "GROUPS"]);
 const ALLOWED_RISK_RESPONSES = new Set(["ACCEPT", "MITIGATE", "TRANSFER", "AVOID"]);
 const ALLOWED_RISK_LEVELS = new Set(["MINOR", "MODERATE", "MAJOR"]);
 const ALLOWED_RISK_LIKELIHOODS = new Set(["UNLIKELY", "LIKELY", "ALMOST_CERTAIN"]);
@@ -928,6 +975,50 @@ const ALLOWED_RISK_CATEGORIES = new Set([
   "STRATEGIC_AND_MARKET",
   "FRAUD",
 ]);
+
+function buildPolicyAudiencePatch(opts: PolicySetAudienceOptions): Record<string, unknown> {
+  if (opts.audience === undefined) {
+    throw codeError("VALIDATION", "--audience is required. Allowed: " + Array.from(ALLOWED_POLICY_AUDIENCES).join(", ") + ".");
+  }
+  const audience = opts.audience.trim().toUpperCase().replace(/-/g, "_");
+  if (!ALLOWED_POLICY_AUDIENCES.has(audience)) {
+    throw codeError("VALIDATION", "Invalid --audience value. Allowed: " + Array.from(ALLOWED_POLICY_AUDIENCES).join(", ") + ".");
+  }
+  const groupIds = (Array.isArray(opts.groupId) ? opts.groupId : []).map((value) => {
+    const trimmed = value.trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+      throw codeError("VALIDATION", "--group-id must be a UUID.");
+    }
+    return trimmed;
+  });
+  if (audience !== "GROUPS" && groupIds.length > 0) {
+    throw codeError("VALIDATION", "--group-id is only valid with --audience GROUPS.");
+  }
+  // For GROUPS we send the (possibly empty) group list; an empty list means no one is required to sign.
+  // For EVERYONE/EMPLOYEES/CONTRACTORS the server derives membership, so only the audience is sent.
+  return audience === "GROUPS" ? { audience, groupIds } : { audience };
+}
+
+function sanitizePolicy(value: unknown): Record<string, unknown> {
+  const row = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const version = row.currentVersion && typeof row.currentVersion === "object" ? (row.currentVersion as Record<string, unknown>) : {};
+  const countOf = (key: string): number | null => (Array.isArray(version[key]) ? (version[key] as unknown[]).length : null);
+  return {
+    id: row.id,
+    name: row.name,
+    audience: row.audience,
+    reviewerType: row.reviewerType,
+    types: Array.isArray(row.types)
+      ? row.types.map((type) => {
+          const t = type && typeof type === "object" ? (type as Record<string, unknown>) : {};
+          return t.name;
+        })
+      : [],
+    currentVersionApplicableMemberCount: countOf("applicableTenantMembers"),
+    currentVersionDirectSignatureCount: countOf("directSignatures") ?? countOf("applicableSignatures"),
+    updatedAt: row.updatedAt,
+  };
+}
 
 function buildRiskPatch(opts: RiskUpdateOptions): Record<string, unknown> {
   const patch: Record<string, unknown> = {};

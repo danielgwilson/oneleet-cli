@@ -117,6 +117,9 @@ oneleet evidence link-vendor <evidence-id> --vendor-id <tenant-vendor-id> --json
 oneleet evidence link-vendor <evidence-id> --vendor-id <tenant-vendor-id> --write --confirm <evidence-id> --json
 oneleet policies list --json
 oneleet policies types --json
+oneleet policies set-audience <policy-id> --audience GROUPS --json
+oneleet policies set-audience <policy-id> --audience GROUPS --write --confirm <policy-id> --json
+oneleet policies set-audience <policy-id> --audience EVERYONE --write --confirm <policy-id> --json
 oneleet frameworks list --json
 oneleet access-reviews list --json
 oneleet domains list --json

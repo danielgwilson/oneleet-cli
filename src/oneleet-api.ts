@@ -112,6 +112,17 @@ export class OneleetApiClient {
     return this.request("/api/v1/policy-types");
   }
 
+  async getPolicy(policyId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/policies/${requireId(policyId, "policy id")}`);
+  }
+
+  async updatePolicy(policyId: string, body: RequestBody): Promise<unknown> {
+    return this.request(`/api/v1/policies/${requireId(policyId, "policy id")}`, undefined, {
+      method: "PATCH",
+      body,
+    });
+  }
+
   async listFrameworks(tenantId = this.tenantId): Promise<Record<string, unknown>> {
     return this.request(`/api/v1/tenants/${requireTenantId(tenantId)}/tenant-compliance-frameworks`);
   }
