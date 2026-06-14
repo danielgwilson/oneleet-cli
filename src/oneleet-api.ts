@@ -62,8 +62,70 @@ export class OneleetApiClient {
     return this.request(`/api/v1/tenants/${requireTenantId(tenantId)}/monitors`);
   }
 
+  async getMonitor(monitorId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}`);
+  }
+
+  async listMonitorControls(monitorId: string): Promise<Record<string, unknown> | unknown[]> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/controls`);
+  }
+
+  async rerunMonitor(monitorId: string): Promise<unknown> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/rerun`, undefined, {
+      method: "POST",
+    });
+  }
+
+  async updateMonitorEnabled(monitorId: string, body: RequestBody): Promise<unknown> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/enabled`, undefined, {
+      method: "POST",
+      body,
+    });
+  }
+
+  async snoozeMonitor(monitorId: string, body: RequestBody): Promise<unknown> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/snooze`, undefined, {
+      method: "POST",
+      body,
+    });
+  }
+
+  async unsnoozeMonitor(monitorId: string): Promise<unknown> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/unsnooze`, undefined, {
+      method: "POST",
+    });
+  }
+
+  async updateMonitorConfig(monitorId: string, body: RequestBody): Promise<unknown> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/config`, undefined, {
+      method: "PATCH",
+      body,
+    });
+  }
+
+  async updateMonitorAssetsIgnoreStatus(monitorId: string, body: RequestBody): Promise<unknown> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/update-assets-ignore-status`, undefined, {
+      method: "POST",
+      body,
+    });
+  }
+
   async listControls(tenantId = this.tenantId): Promise<Record<string, unknown>> {
     return this.request(`/api/v1/tenants/${requireTenantId(tenantId)}/controls/program`);
+  }
+
+  async getControl(controlId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/controls/${requireId(controlId, "control id")}`);
+  }
+
+  async listControlChecks(controlId: string): Promise<Record<string, unknown> | unknown[]> {
+    return this.request(`/api/v1/controls/${requireId(controlId, "control id")}/checks`);
+  }
+
+  async requestControlReview(controlId: string): Promise<unknown> {
+    return this.request(`/api/v1/controls/${requireId(controlId, "control id")}/request-review`, undefined, {
+      method: "POST",
+    });
   }
 
   async listMembers(tenantId = this.tenantId): Promise<Record<string, unknown>> {

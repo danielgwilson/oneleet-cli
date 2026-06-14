@@ -12,6 +12,7 @@ const packageRoot = path.resolve(__dirname, "..");
 const cliPath = path.join(packageRoot, "dist", "cli.js");
 const tenantId = "00000000-0000-4000-8000-000000000001";
 const fakeCookie = "synthetic-cookie-do-not-leak";
+const feedbackControlId = "00000000-0000-4000-8000-000000000101";
 const uuidPattern = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i;
 
 const sensitiveValues = [
@@ -202,6 +203,7 @@ test("json parser errors use the JSON failure envelope", async () => {
 test("default list summaries redact upstream identifiers and sensitive fields", async () => {
   const summaryCommands = [
     ["controls", "list"],
+    ["controls", "feedback"],
     ["monitors", "list"],
     ["people", "list"],
     ["vendors", "list"],
@@ -238,6 +240,34 @@ test("default list summaries redact upstream identifiers and sensitive fields", 
       assert.equal(payload.ok, true, `${command.join(" ")} did not return ok envelope`);
       assertSafeSummaryOutput(result.stdout, command.join(" "));
     }
+  } finally {
+    await server.close();
+    await rm(tempConfigHome, { recursive: true, force: true });
+  }
+});
+
+test("controls feedback traverses control detail rows and redacts free-text feedback", async () => {
+  const server = await startFixtureServer();
+  const tempConfigHome = await mkdtemp(path.join(os.tmpdir(), "oneleet-cli-feedback-test-"));
+
+  try {
+    const result = await runCli(["controls", "feedback", "--json"], fixtureEnv(server.url, tempConfigHome));
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.data.totalMatching, 1);
+    assert.equal(payload.data.returned, 1);
+    assert.equal(payload.data.rows[0].status, "NEEDS_CHANGES");
+    assert.equal(payload.data.rows[0].reviewStatus, "REJECTED");
+    assert.match(payload.data.rows[0].feedback, /\[file-redacted\]/);
+    assert.match(payload.data.rows[0].feedback, /\[email-redacted\]/);
+    assert.match(payload.data.rows[0].feedback, /\[url-redacted\]/);
+    assert.equal(payload.data.rows[0].evidenceRequests.length, 1);
+    assert.equal("id" in payload.data.rows[0], false);
+    assert.equal("id" in payload.data.rows[0].evidenceRequests[0], false);
+    assertSafeSummaryOutput(result.stdout, "controls feedback");
+    assertRequiredPathsHit(server.requests, [tenantPath("/controls/program"), `/api/v1/controls/${feedbackControlId}`]);
   } finally {
     await server.close();
     await rm(tempConfigHome, { recursive: true, force: true });
@@ -471,6 +501,44 @@ function fixtureFor(pathname) {
           checkSummary: { totalChecksCount: 1, passingChecksCount: 1, checksPassingPercentage: 100 },
           evidence: [],
           evidenceRequests: [],
+        },
+        {
+          id: feedbackControlId,
+          title: "Access revoking process enforced",
+          category: "ACCESS_CONTROL_AND_AUTHORIZATION",
+          status: "NEEDS_CHANGES",
+          tenantComplianceRequirements: [{ frameworkName: "HIPAA", referenceId: "164.308(a)(3)(ii)(C)" }],
+          checkSummary: { totalChecksCount: 1, passingChecksCount: 1, checksPassingPercentage: 100 },
+          evidence: [{ type: "FILE" }],
+          evidenceRequests: [{ status: "PENDING" }],
+        },
+      ],
+    },
+    [`/api/v1/controls/${feedbackControlId}`]: {
+      id: feedbackControlId,
+      tenantId,
+      status: "NEEDS_CHANGES",
+      reviewStatus: "REJECTED",
+      reviewedAt: "2026-06-02T18:28:59.595Z",
+      reviewRequestedAt: "2026-05-29T23:02:05.879Z",
+      reviewerName: "Ada Lovelace",
+      reviewDetails: "Please replace phi-patient-list.csv and ask ada@example.test to upload evidence from https://patient.example.test/phi.",
+      controlType: {
+        title: "Access revoking process enforced",
+        category: "ACCESS_CONTROL_AND_AUTHORIZATION",
+      },
+      tenantComplianceRequirements: [{ frameworkName: "HIPAA", referenceId: "164.308(a)(3)(ii)(C)" }],
+      checks: [{ status: "PASSING" }],
+      linkedEvidence: [{ id: "evidence-1", fileName: "phi-patient-list.csv" }],
+      evidenceRequests: [
+        {
+          id: "00000000-0000-4000-8000-000000000102",
+          controlId: feedbackControlId,
+          status: "PENDING",
+          title: "Upload revocation evidence",
+          description: "Reviewer needs a dated access revocation artifact.",
+          createdAt: "2026-06-02T18:28:59.595Z",
+          updatedAt: "2026-06-02T18:28:59.595Z",
         },
       ],
     },

@@ -74,8 +74,8 @@ machine-local absolute paths.
 - vendor-risk aggregate report
 - trust readiness aggregate report
 - security remediation aggregate queue
-- monitors
-- controls
+- monitors, including monitor detail and linked-control reads
+- controls, including sanitized reviewer feedback traversal for matching controls and attached-check reads
 - evidence
 - policies and policy types
 - compliance frameworks
@@ -93,7 +93,23 @@ machine-local absolute paths.
 - attack-surface summary, issues, and scans
 - arbitrary read-only `/api/v1/...` GET paths through `api get`
 
-Mutation commands are out of scope for V1.
+## V1 supported writes
+
+Write commands are dry-run by default and require exact `--write --confirm ...`
+confirmation before sending a mutation:
+
+- evidence upload and evidence-to-control/vendor linking
+- policy signature-audience updates
+- risk updates
+- monitor rerun
+- monitor enable/disable
+- monitor snooze/unsnooze
+- monitor config patching
+- monitor asset ignore/unignore
+
+Control-check relationship unlinking is not part of V1; the observed Oneleet
+frontend exposes `controls checks` and `monitors controls` reads, but no typed
+unlink route.
 
 `api get` is an unsafe raw-output escape hatch. It requires `--unsafe-raw` and should not be used for normal report generation.
 
@@ -102,8 +118,10 @@ Mutation commands are out of scope for V1.
 - `people list` summarizes rows by default; pass `--raw` for upstream rows.
 - `evidence list` summarizes rows by default; pass `--raw` for upstream rows.
 - `security-training progress` summarizes rows by default; pass `--raw` for upstream rows.
-- `whoami`, `tenant get`, `frameworks list`, `controls list`, `monitors list`, `vendors list`, `domains list`, `integrations list`, `policies list`, `access-reviews list`, `risk-assessments list`, `reports list`, trust-center row commands, `pentests active-request`, `code-security scan`, `code-security repositories`, `attack-surface issues`, and `attack-surface scans` summarize by default where upstream rows may expose identity, tenant, domain, URL, file, or raw finding details. Pass `--raw` only for narrow local debugging where available.
+- `whoami`, `tenant get`, `frameworks list`, `controls list`, `controls checks`, `controls feedback`, `monitors list`, `monitors get`, `monitors controls`, `vendors list`, `domains list`, `integrations list`, `policies list`, `access-reviews list`, `risk-assessments list`, `reports list`, trust-center row commands, `pentests active-request`, `code-security scan`, `code-security repositories`, `attack-surface issues`, and `attack-surface scans` summarize by default where upstream rows may expose identity, tenant, domain, URL, file, or raw finding details. Pass `--raw` only for narrow local debugging where available.
 - Default summarized list rows expose local `ref` values and `hasId` booleans instead of raw upstream IDs. These refs are stable only for that command output.
+- `controls feedback` defaults to controls with `NEEDS_CHANGES` status, fetches control detail rows, redacts sensitive patterns from reviewer/evidence-request free text, and omits upstream IDs unless explicitly run with `--show-ids`.
+- `controls checks` and `monitors controls` omit upstream relationship IDs unless explicitly run with `--show-ids`.
 - `hipaa report`, `ops workforce-summary`, `vendor-risk report`, `trust readiness`, and `security remediation-queue` are aggregate-only and should be preferred for scenario reports.
 
 ## HIPAA Report Completeness
