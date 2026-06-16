@@ -1,6 +1,6 @@
 ---
 name: oneleet
-description: "Use the Oneleet CLI to inspect Oneleet security and compliance posture through an unofficial read-only private-surface adapter. Prefer summarized JSON and aggregate reports; never print cookies or raw sensitive payloads."
+description: "Use the Oneleet CLI to inspect Oneleet security and compliance posture through an unofficial read-first private-surface adapter. Prefer summarized JSON and aggregate reports; never print cookies or raw sensitive payloads."
 ---
 
 # Oneleet CLI Skill
@@ -38,6 +38,9 @@ node dist/cli.js --help
   dumps, or full upstream JSON exports.
 - Prefer aggregate reports and summarized list outputs.
 - Use `--raw` and `api get --unsafe-raw` only for short-lived local debugging.
+- Mutations must stay limited to explicit typed workflow commands with narrow
+  safety gates. `monitors refresh <monitor-ref>` triggers a Oneleet monitor
+  rerun for a local `monitor-###` ref from `monitors list`.
 - Default summarized list rows use local `ref` labels and `hasId` booleans
   instead of raw upstream IDs.
 - Reports should use counts, statuses, categories, and control titles. Avoid
@@ -67,6 +70,7 @@ oneleet ops workforce-summary --json
 oneleet vendor-risk report --json
 oneleet trust readiness --json
 oneleet security remediation-queue --json
+oneleet monitors refresh monitor-014 --wait 120 --json
 ```
 
 Treat scenario reports as coverage for current workflows, not full Oneleet

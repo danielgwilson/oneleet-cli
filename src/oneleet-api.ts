@@ -62,6 +62,10 @@ export class OneleetApiClient {
     return this.request(`/api/v1/tenants/${requireTenantId(tenantId)}/monitors`);
   }
 
+  async rerunMonitor(monitorId: string): Promise<unknown> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/rerun`, undefined, { method: "POST" });
+  }
+
   async listControls(tenantId = this.tenantId): Promise<Record<string, unknown>> {
     return this.request(`/api/v1/tenants/${requireTenantId(tenantId)}/controls/program`);
   }

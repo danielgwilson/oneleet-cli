@@ -1,6 +1,6 @@
 # Contributing
 
-`oneleet-cli` is an unofficial, read-only adapter for Oneleet private web APIs.
+`oneleet-cli` is an unofficial, read-first adapter for Oneleet private web APIs.
 Treat endpoint names and response shapes as unstable.
 
 ## Local Setup
@@ -16,7 +16,9 @@ tenant reports, screenshots, or downloaded evidence.
 
 ## Safety Rules
 
-- Keep V1 read-only unless there is an explicit design decision for mutations.
+- Keep V1 read-first. Mutations must stay limited to explicit typed workflow
+  commands with narrow safety gates; broader write commands need an explicit
+  design decision.
 - Prefer summarized outputs and aggregate reports.
 - Any raw-output path must be visibly unsafe and opt-in.
 - Tests must use synthetic fixtures only.

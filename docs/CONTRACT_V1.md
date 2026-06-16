@@ -93,7 +93,16 @@ machine-local absolute paths.
 - attack-surface summary, issues, and scans
 - arbitrary read-only `/api/v1/...` GET paths through `api get`
 
-Mutation commands are out of scope for V1.
+## V1 supported mutations
+
+- `monitors refresh <monitor-ref>` triggers Oneleet's monitor rerun endpoint for
+  a monitor already present in the configured tenant monitor list.
+- evidence upload/link workflow commands are dry-run by default and require
+  `--write` plus exact confirmation to mutate upstream state.
+- risk update workflow commands are dry-run by default and require `--write`
+  plus exact confirmation to mutate upstream state.
+
+All other mutation commands are out of scope for V1.
 
 `api get` is an unsafe raw-output escape hatch. It requires `--unsafe-raw` and should not be used for normal report generation.
 
@@ -102,7 +111,8 @@ Mutation commands are out of scope for V1.
 - `people list` summarizes rows by default; pass `--raw` for upstream rows.
 - `evidence list` summarizes rows by default; pass `--raw` for upstream rows.
 - `security-training progress` summarizes rows by default; pass `--raw` for upstream rows.
-- `whoami`, `tenant get`, `frameworks list`, `controls list`, `monitors list`, `vendors list`, `domains list`, `integrations list`, `policies list`, `access-reviews list`, `risk-assessments list`, `reports list`, trust-center row commands, `pentests active-request`, `code-security scan`, `code-security repositories`, `attack-surface issues`, and `attack-surface scans` summarize by default where upstream rows may expose identity, tenant, domain, URL, file, or raw finding details. Pass `--raw` only for narrow local debugging where available.
+- `whoami`, `tenant get`, `frameworks list`, `controls list`, `monitors list`, `monitors refresh`, `vendors list`, `domains list`, `integrations list`, `policies list`, `access-reviews list`, `risk-assessments list`, `reports list`, trust-center row commands, `pentests active-request`, `code-security scan`, `code-security repositories`, `attack-surface issues`, and `attack-surface scans` summarize by default where upstream rows may expose identity, tenant, domain, URL, file, or raw finding details. Pass `--raw` only for narrow local debugging where available.
+- Evidence and risk write workflow outputs may include the affected upstream IDs needed for follow-up writes, but must not print cookies, raw tenant exports, local paths, or unrequested raw payloads.
 - Default summarized list rows expose local `ref` values and `hasId` booleans instead of raw upstream IDs. These refs are stable only for that command output.
 - `hipaa report`, `ops workforce-summary`, `vendor-risk report`, `trust readiness`, and `security remediation-queue` are aggregate-only and should be preferred for scenario reports.
 

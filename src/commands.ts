@@ -41,6 +41,7 @@ import {
   summarizeEvidence,
   summarizeFrameworks,
   summarizeIntegrations,
+  summarizeMonitorRow,
   summarizeMembers,
   summarizeMonitors,
   summarizePentestRequest,
@@ -281,22 +282,65 @@ export function buildProgram(): Command {
         }),
     );
   
-  program
-    .command("monitors")
-    .description("Monitor commands")
-    .addCommand(
-      new Command("list")
-        .option("--tenant-id <id>", "Tenant id override")
-        .option("--raw", "Return full upstream monitor rows instead of summarized rows")
-        .option("--json", "Print JSON envelope")
-        .action(async (opts: TenantOptions & { raw?: boolean }) => {
-          await runJsonAction(async () => {
-            const config = await requireConfig(opts);
-            const data = await clientFor(config).listMonitors(opts.tenantId || config.tenantId);
-            return opts.raw ? data : summarizeMonitors(data);
-          }, opts);
-        }),
-    );
+  const monitors = new Command("monitors").description("Monitor commands");
+  monitors
+    .command("list")
+    .option("--tenant-id <id>", "Tenant id override")
+    .option("--raw", "Return full upstream monitor rows instead of summarized rows")
+    .option("--json", "Print JSON envelope")
+    .action(async (opts: TenantOptions & { raw?: boolean }) => {
+      await runJsonAction(async () => {
+        const config = await requireConfig(opts);
+        const data = await clientFor(config).listMonitors(opts.tenantId || config.tenantId);
+        return opts.raw ? data : summarizeMonitors(data);
+      }, opts);
+    });
+  monitors
+    .command("refresh")
+    .argument("<monitor>", "Local monitor ref from `monitors list`, for example monitor-014")
+    .description("Trigger a Oneleet monitor rerun using a safe local monitor ref")
+    .option("--tenant-id <id>", "Tenant id override")
+    .option("--wait <seconds>", "Poll for a completed latest run for up to N seconds", "0")
+    .option("--json", "Print JSON envelope")
+    .action(async (monitor: string, opts: TenantOptions & { wait: string }) => {
+      await runJsonAction(async () => {
+        const waitSeconds = parseWaitSeconds(opts.wait);
+        const config = await requireConfig(opts);
+        const tenantId = tenantIdFor(opts, config);
+        const client = clientFor(config);
+        const monitorRows = rowsFromMonitorList(await client.listMonitors(tenantId));
+        const target = resolveMonitorForRefresh(monitor, monitorRows);
+        if (target.row?.monitorType?.rerunDisabled === true) {
+          throw codeError("CHECK_FAILED", "This monitor type reports rerunDisabled=true.");
+        }
+
+        const beforeRunKey = monitorRunKey(target.row);
+        await client.rerunMonitor(target.id);
+
+        const waitStartedAt = Date.now();
+        const waitResult = await readMonitorAfterRefresh(client, tenantId, target.id, beforeRunKey, waitSeconds);
+        const afterRow = waitResult.row || target.row;
+        const afterIndex = waitResult.index ?? target.index;
+
+        return {
+          triggered: true,
+          selector: {
+            mode: "ref",
+            ref: target.ref,
+            hasId: true,
+          },
+          wait: {
+            requestedSeconds: waitSeconds,
+            completed: waitResult.completed,
+            reason: waitResult.reason,
+            elapsedSeconds: Math.round((Date.now() - waitStartedAt) / 1000),
+          },
+          before: summarizeMonitorRow(target.row, target.index),
+          after: summarizeMonitorRow(afterRow, afterIndex),
+        };
+      }, opts);
+    });
+  program.addCommand(monitors);
   
   program
     .command("controls")
@@ -1120,4 +1164,121 @@ function sanitizeEvidence(value: unknown): Record<string, unknown> {
     createdAt: row.createdAt || null,
     updatedAt: row.updatedAt || null,
   };
+}
+
+type MonitorRow = Record<string, any>;
+
+type ResolvedMonitor = {
+  id: string;
+  ref: string;
+  row: MonitorRow;
+  index: number;
+};
+
+type MonitorWaitResult = {
+  completed: boolean;
+  reason: "not-requested" | "completed" | "timeout";
+  row: MonitorRow | null;
+  index: number | null;
+};
+
+const MONITOR_REF_PATTERN = /^monitor-(\d+)$/;
+const ACTIVE_RUN_STATUSES = new Set(["PENDING", "RUNNING", "IN_PROGRESS", "RETRYING", "UNQUERIED"]);
+
+function rowsFromMonitorList(raw: unknown): MonitorRow[] {
+  if (!raw || typeof raw !== "object" || !Array.isArray((raw as any).rows)) {
+    throw codeError("CHECK_FAILED", "Unexpected monitor list response shape.");
+  }
+  return (raw as any).rows;
+}
+
+function resolveMonitorForRefresh(selector: string, rows: MonitorRow[]): ResolvedMonitor {
+  const match = MONITOR_REF_PATTERN.exec(selector);
+  if (!match) {
+    throw codeError("VALIDATION", "Monitor must be a local ref like monitor-014 from `oneleet monitors list`.");
+  }
+
+  const index = Number(match[1]) - 1;
+  if (!Number.isSafeInteger(index) || index < 0 || index >= rows.length) {
+    throw codeError("NOT_FOUND", "No monitor exists for that local ref in the current monitor list.");
+  }
+  return monitorAt(rows, index);
+}
+
+function monitorAt(rows: MonitorRow[], index: number): ResolvedMonitor {
+  const row = rows[index];
+  if (!row || typeof row.id !== "string" || !row.id.trim()) {
+    throw codeError("CHECK_FAILED", "Monitor row is missing an upstream id required for rerun.");
+  }
+  return {
+    id: row.id,
+    ref: refForIndex(index),
+    row,
+    index,
+  };
+}
+
+function refForIndex(index: number): string {
+  return `monitor-${String(index + 1).padStart(3, "0")}`;
+}
+
+function parseWaitSeconds(value: string): number {
+  if (!/^\d+$/.test(value)) throw codeError("VALIDATION", "--wait must be an integer number of seconds.");
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 300) {
+    throw codeError("VALIDATION", "--wait must be between 0 and 300 seconds.");
+  }
+  return parsed;
+}
+
+function monitorRunKey(row: MonitorRow): string {
+  const latestRun = row?.latestRun && typeof row.latestRun === "object" ? row.latestRun : {};
+  return [latestRun.id, latestRun.createdAt, latestRun.updatedAt, latestRun.status].filter(Boolean).join(":");
+}
+
+async function readMonitorAfterRefresh(
+  client: ReturnType<typeof clientFor>,
+  tenantId: string,
+  monitorId: string,
+  beforeRunKey: string,
+  waitSeconds: number,
+): Promise<MonitorWaitResult> {
+  if (waitSeconds === 0) {
+    const current = await findMonitorById(client, tenantId, monitorId);
+    return { completed: false, reason: "not-requested", row: current?.row || null, index: current?.index ?? null };
+  }
+
+  const deadline = Date.now() + waitSeconds * 1000;
+  let latest: { row: MonitorRow; index: number } | null = null;
+
+  while (Date.now() <= deadline) {
+    latest = await findMonitorById(client, tenantId, monitorId);
+    if (latest) {
+      const status = String(latest.row?.latestRun?.status || "");
+      const runChanged = Boolean(monitorRunKey(latest.row)) && monitorRunKey(latest.row) !== beforeRunKey;
+      if (runChanged && !ACTIVE_RUN_STATUSES.has(status)) {
+        return { completed: true, reason: "completed", row: latest.row, index: latest.index };
+      }
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await sleep(Math.min(2000, remainingMs));
+  }
+
+  return { completed: false, reason: "timeout", row: latest?.row || null, index: latest?.index ?? null };
+}
+
+async function findMonitorById(
+  client: ReturnType<typeof clientFor>,
+  tenantId: string,
+  monitorId: string,
+): Promise<{ row: MonitorRow; index: number } | null> {
+  const rows = rowsFromMonitorList(await client.listMonitors(tenantId));
+  const index = rows.findIndex((row) => row?.id === monitorId);
+  return index >= 0 ? { row: rows[index], index } : null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
