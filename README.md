@@ -1,6 +1,6 @@
 # oneleet-cli
 
-Agent-first private-surface CLI for Oneleet read workflows.
+Agent-first private-surface CLI for Oneleet read workflows and narrow monitor refreshes.
 
 This is an unofficial adapter. It is not affiliated with, endorsed by, or an
 official API wrapper for Oneleet. It uses Oneleet private web API surfaces and
@@ -14,10 +14,14 @@ can drift when Oneleet changes the app.
 - dashboard, HIPAA aggregate report, controls, monitors, evidence, policies, frameworks, people, vendors, domains, integrations, access reviews, risk assessments, security training, trust center, reports, pentests, code security, and attack-surface reads
 - guarded evidence writes for uploading file evidence to controls and linking existing evidence to controls or vendors
 - guarded risk reads/updates for assessment triage
+- narrow `monitors refresh <monitor-ref>` rerun trigger for an existing monitor
 - read-only `/api/v1/...` escape hatch for uncovered Oneleet private API paths
 
-Mutations are limited to explicit workflow commands that are dry-run by default
-and require `--write` plus an exact `--confirm ...` value.
+V1 is read-first. Mutations are limited to explicit typed workflow commands.
+Evidence and risk writes are dry-run by default and require `--write` plus an
+exact `--confirm ...` value. `monitors refresh` only triggers Oneleet's own
+rerun endpoint for a monitor that already appears in the configured tenant's
+monitor list. Do not add broader mutations without a separate decision.
 
 ## Install
 
@@ -105,6 +109,7 @@ oneleet vendor-risk report --json
 oneleet trust readiness --json
 oneleet security remediation-queue --json
 oneleet monitors list --json
+oneleet monitors refresh monitor-014 --wait 120 --json
 oneleet controls list --json
 oneleet evidence list --json
 oneleet evidence list --raw --json
@@ -151,9 +156,11 @@ oneleet api get /api/v1/users/current --unsafe-raw --json
 
 - private-surface, cookie-backed API
 - read-only by default; write commands are opt-in and require `--write` plus exact confirmation
+- `monitors refresh` is an explicit rerun trigger and never accepts raw upstream IDs by default
 - refuses to send the session cookie to non-Oneleet API hosts unless explicitly opted into for synthetic local tests
 - `api get` is an unsafe raw-output escape hatch and requires `--unsafe-raw`
 - no raw HARs, screenshots, storage state, or full recon dumps in repo
+- `monitors refresh` accepts local `monitor-###` refs from `monitors list`; it resolves the upstream id internally and does not print upstream ids by default
 - people, evidence, and security-training progress output is summarized by default; use `--raw` only when you need full upstream rows
 - tenant, current-user, controls, monitors, vendors, domains, integrations, policies, access reviews, reports, trust-center rows, pentest requests, code-security rows, attack-surface issues, and attack-surface scans are also summarized by default where the upstream shape may contain sensitive or noisy details
 - default summarized list rows use local `ref` values and `hasId` booleans instead of raw upstream IDs; pass `--raw` only for short-lived local debugging
@@ -168,7 +175,7 @@ control or vendor evidence without hand-clicking through Oneleet. Upload is
 dry-run by default:
 
 ```bash
-oneleet evidence upload ./Legion_HIPAA_BAA_Register_2026-05-28.csv \
+oneleet evidence upload ./baa-register.csv \
   --control-id <business-associate-agreements-managed-control-id> \
   --link-control-id <business-associate-agreements-with-subcontractors-control-id> \
   --link-control-id <vendor-management-control-id> \
@@ -179,13 +186,13 @@ oneleet evidence upload ./Legion_HIPAA_BAA_Register_2026-05-28.csv \
 To write, repeat the command with the generated confirmation string:
 
 ```bash
-oneleet evidence upload ./Legion_HIPAA_BAA_Register_2026-05-28.csv \
+oneleet evidence upload ./baa-register.csv \
   --control-id <business-associate-agreements-managed-control-id> \
   --link-control-id <business-associate-agreements-with-subcontractors-control-id> \
   --link-control-id <vendor-management-control-id> \
   --reuse-existing-name \
   --write \
-  --confirm Legion_HIPAA_BAA_Register_2026-05-28.csv \
+  --confirm baa-register.csv \
   --json
 ```
 
