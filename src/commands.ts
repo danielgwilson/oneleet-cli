@@ -821,6 +821,44 @@ export function buildProgram(): Command {
             return opts.raw ? data : summarizeAccessReviews(data);
           }, opts);
         }),
+    )
+    .addCommand(
+      new Command("mark-empty-vendors-reviewed")
+        .description("Mark pending access-review vendors with no detected accounts as reviewed. Dry-run by default.")
+        .argument("<access-review-id>", "Access review UUID")
+        .option("--note <value>", "Reviewer note to attach to each mark-as-reviewed action")
+        .option("--show-ids", "Include access-review vendor IDs in target summaries")
+        .option("--write", "Perform the updates. Without this flag, prints a dry-run preview only.")
+        .option("--confirm <access-review-id>", "Required with --write; must equal the access review id")
+        .option("--json", "Print JSON envelope")
+        .action(async (accessReviewId: string, opts: AccessReviewMarkEmptyVendorsOptions) => {
+          await runJsonAction(async () => {
+            const normalizedAccessReviewId = requireUuid(accessReviewId, "access review id");
+            const note = accessReviewMarkReviewedNote(opts);
+            const client = clientFor(await requireConfig(opts));
+            const before = unwrapData(await client.getAccessReview(normalizedAccessReviewId));
+            const selection = selectEmptyAccessReviewVendors(before);
+            const plan = describeEmptyAccessReviewVendorSelection(before, normalizedAccessReviewId, selection, note, Boolean(opts.showIds));
+
+            if (!opts.write) return { ...plan, dryRun: true, writeRequired: "--write --confirm " + normalizedAccessReviewId };
+            if (opts.confirm !== normalizedAccessReviewId) {
+              throw codeError("VALIDATION", "--write requires --confirm to exactly match the access review id.");
+            }
+
+            for (const target of selection.targets) {
+              await client.markAccessReviewVendorReviewed(target.id, buildAccessReviewMarkReviewedForm(note));
+            }
+
+            const after = unwrapData(await client.getAccessReview(normalizedAccessReviewId));
+            const afterSelection = selectEmptyAccessReviewVendors(after);
+            return {
+              ...plan,
+              dryRun: false,
+              writtenCount: selection.targets.length,
+              after: describeEmptyAccessReviewVendorSelection(after, normalizedAccessReviewId, afterSelection, note, Boolean(opts.showIds)),
+            };
+          }, opts);
+        }),
     );
   
   program
@@ -927,6 +965,92 @@ export function buildProgram(): Command {
           dryRun: false,
           riskId,
           patch,
+          before: sanitizeRisk(before),
+          after: sanitizeRisk(after),
+        };
+      }, opts);
+    });
+  risks
+    .command("archive")
+    .description("Archive a Oneleet risk. Dry-run by default; real writes require --write and --confirm <risk-id>.")
+    .argument("<risk-id>", "Risk UUID")
+    .option("--write", "Perform the archive. Without this flag, prints a dry-run preview only.")
+    .option("--confirm <risk-id>", "Required with --write; must equal the risk id being archived")
+    .option("--json", "Print JSON envelope")
+    .action(async (riskId: string, opts: RiskArchiveOptions) => {
+      await runJsonAction(async () => {
+        requireUuid(riskId, "risk id");
+        const config = await requireConfig(opts);
+        const client = clientFor(config);
+        const before = await client.getRisk(riskId);
+        if (!opts.write) {
+          return {
+            dryRun: true,
+            writeRequired: "--write --confirm " + riskId,
+            riskId,
+            before: sanitizeRisk(before),
+          };
+        }
+        if (opts.confirm !== riskId) {
+          throw codeError("VALIDATION", "--write requires --confirm to exactly match the risk id.");
+        }
+        const result = await client.archiveRisk(riskId);
+        const after = await client.getRisk(riskId).catch(() => null);
+        return {
+          dryRun: false,
+          riskId,
+          result,
+          before: sanitizeRisk(before),
+          after: after ? sanitizeRisk(after) : null,
+        };
+      }, opts);
+    });
+  risks
+    .command("link-controls")
+    .description("Append control links to a Oneleet risk. Dry-run by default; real writes require --write and --confirm <risk-id>.")
+    .argument("<risk-id>", "Risk UUID")
+    .option("--control-id <id>", "Control UUID to link; repeatable", collect, [])
+    .option("--replace", "Replace existing risk control links instead of appending")
+    .option("--write", "Perform the update. Without this flag, prints a dry-run preview only.")
+    .option("--confirm <risk-id>", "Required with --write; must equal the risk id being updated")
+    .option("--json", "Print JSON envelope")
+    .action(async (riskId: string, opts: RiskLinkControlsOptions) => {
+      await runJsonAction(async () => {
+        requireUuid(riskId, "risk id");
+        const controlIds = uniqueUuidList(opts.controlId || [], "control id");
+        if (controlIds.length === 0) throw codeError("VALIDATION", "Provide at least one --control-id.");
+        const config = await requireConfig(opts);
+        const client = clientFor(config);
+        const before = await client.getRisk(riskId);
+        const beforeRow = unwrapData(before);
+        const existingControlIds = opts.replace ? [] : controlIdsOfRisk(beforeRow);
+        const nextControlIds = uniqueIds([...existingControlIds, ...controlIds]);
+        const patch = { controls: nextControlIds.map((id) => ({ id })) };
+        const summary = {
+          addedControlIds: controlIds.filter((id) => !existingControlIds.includes(id)),
+          existingControlCount: existingControlIds.length,
+          nextControlCount: nextControlIds.length,
+          replace: Boolean(opts.replace),
+        };
+        if (!opts.write) {
+          return {
+            dryRun: true,
+            writeRequired: "--write --confirm " + riskId,
+            riskId,
+            summary,
+            before: sanitizeRisk(before),
+            patch,
+          };
+        }
+        if (opts.confirm !== riskId) {
+          throw codeError("VALIDATION", "--write requires --confirm to exactly match the risk id.");
+        }
+        await client.updateRisk(riskId, patch);
+        const after = await client.getRisk(riskId);
+        return {
+          dryRun: false,
+          riskId,
+          summary,
           before: sanitizeRisk(before),
           after: sanitizeRisk(after),
         };
@@ -1165,6 +1289,18 @@ type RiskUpdateOptions = JsonOptions & {
   confirm?: string;
 };
 
+type RiskArchiveOptions = JsonOptions & {
+  write?: boolean;
+  confirm?: string;
+};
+
+type RiskLinkControlsOptions = JsonOptions & {
+  controlId?: string[];
+  replace?: boolean;
+  write?: boolean;
+  confirm?: string;
+};
+
 type EvidenceUploadOptions = TenantOptions & {
   controlId: string;
   linkControlId?: string[];
@@ -1227,6 +1363,13 @@ type ControlReviewWriteOptions = JsonOptions & {
   confirm?: string;
 };
 
+type AccessReviewMarkEmptyVendorsOptions = JsonOptions & {
+  note?: string;
+  showIds?: boolean;
+  write?: boolean;
+  confirm?: string;
+};
+
 type EvidenceUploadDescription = {
   fileName: string;
   sizeBytes: number;
@@ -1234,6 +1377,24 @@ type EvidenceUploadDescription = {
   contents: Uint8Array;
 };
 
+type AccessReviewVendorTarget = {
+  id: string;
+  status: string | null;
+  accountCount: number;
+  reviewedAtPresent: boolean;
+};
+
+type AccessReviewEmptyVendorSelection = {
+  vendorCount: number;
+  zeroAccountVendorCount: number;
+  alreadyReviewedZeroAccountVendorCount: number;
+  skippedWithAccountsCount: number;
+  missingIdCount: number;
+  targets: AccessReviewVendorTarget[];
+};
+
+const DEFAULT_EMPTY_ACCESS_REVIEW_VENDOR_NOTE =
+  "No detected account-level access in Oneleet at review time; marked not applicable for access certification.";
 const ALLOWED_POLICY_AUDIENCES = new Set(["EVERYONE", "EMPLOYEES", "CONTRACTORS", "GROUPS"]);
 const ALLOWED_RISK_RESPONSES = new Set(["ACCEPT", "MITIGATE", "TRANSFER", "AVOID"]);
 const ALLOWED_RISK_LEVELS = new Set(["MINOR", "MODERATE", "MAJOR"]);
@@ -1341,6 +1502,110 @@ function buildMonitorAssetIgnorePatch(opts: MonitorAssetIgnoreOptions): Record<s
   };
 }
 
+function accessReviewMarkReviewedNote(opts: AccessReviewMarkEmptyVendorsOptions): string {
+  const note = (opts.note ?? DEFAULT_EMPTY_ACCESS_REVIEW_VENDOR_NOTE).trim();
+  if (!note) throw codeError("VALIDATION", "--note cannot be empty.");
+  return note;
+}
+
+function buildAccessReviewMarkReviewedForm(note: string): FormData {
+  const form = new FormData();
+  form.append("note", note);
+  return form;
+}
+
+function selectEmptyAccessReviewVendors(value: unknown): AccessReviewEmptyVendorSelection {
+  const vendors = accessReviewVendorsOf(value);
+  const selection: AccessReviewEmptyVendorSelection = {
+    vendorCount: vendors.length,
+    zeroAccountVendorCount: 0,
+    alreadyReviewedZeroAccountVendorCount: 0,
+    skippedWithAccountsCount: 0,
+    missingIdCount: 0,
+    targets: [],
+  };
+
+  for (const vendor of vendors) {
+    const accountCount = accessReviewVendorAccountCount(vendor);
+    const reviewed = isAccessReviewVendorReviewed(vendor);
+    if (accountCount > 0) {
+      selection.skippedWithAccountsCount += 1;
+      continue;
+    }
+
+    selection.zeroAccountVendorCount += 1;
+    if (reviewed) {
+      selection.alreadyReviewedZeroAccountVendorCount += 1;
+      continue;
+    }
+
+    const id = typeof vendor.id === "string" ? vendor.id : "";
+    if (!id) {
+      selection.missingIdCount += 1;
+      continue;
+    }
+
+    selection.targets.push({
+      id,
+      status: typeof vendor.status === "string" ? vendor.status : null,
+      accountCount,
+      reviewedAtPresent: Boolean(vendor.reviewedAt),
+    });
+  }
+
+  return selection;
+}
+
+function accessReviewVendorsOf(value: unknown): Record<string, unknown>[] {
+  const row = unwrapData(value);
+  return Array.isArray(row.vendors) ? row.vendors.filter((vendor): vendor is Record<string, unknown> => Boolean(vendor && typeof vendor === "object")) : [];
+}
+
+function accessReviewVendorAccountCount(value: Record<string, unknown>): number {
+  return Array.isArray(value.accessReviewAccounts) ? value.accessReviewAccounts.length : 0;
+}
+
+function isAccessReviewVendorReviewed(value: Record<string, unknown>): boolean {
+  return value.status === "REVIEWED" || Boolean(value.reviewedAt);
+}
+
+function describeEmptyAccessReviewVendorSelection(
+  accessReview: unknown,
+  accessReviewId: string,
+  selection: AccessReviewEmptyVendorSelection,
+  note: string,
+  showIds: boolean,
+): Record<string, unknown> {
+  const row = unwrapData(accessReview);
+  return {
+    accessReviewId,
+    accessReviewStatus: row.status || null,
+    hasTitle: Boolean(row.title),
+    note,
+    summary: {
+      vendorCount: selection.vendorCount,
+      zeroAccountVendorCount: selection.zeroAccountVendorCount,
+      alreadyReviewedZeroAccountVendorCount: selection.alreadyReviewedZeroAccountVendorCount,
+      skippedWithAccountsCount: selection.skippedWithAccountsCount,
+      missingIdCount: selection.missingIdCount,
+      targetCount: selection.targets.length,
+    },
+    targets: selection.targets.map((target, index) => summarizeAccessReviewVendorTarget(target, index, showIds)),
+  };
+}
+
+function summarizeAccessReviewVendorTarget(target: AccessReviewVendorTarget, index: number, showIds: boolean): Record<string, unknown> {
+  const row: Record<string, unknown> = {
+    ref: `access-review-vendor-${String(index + 1).padStart(3, "0")}`,
+    hasId: Boolean(target.id),
+    status: target.status,
+    accountCount: target.accountCount,
+    reviewedAtPresent: target.reviewedAtPresent,
+  };
+  if (showIds) row.id = target.id;
+  return row;
+}
+
 function parseJsonObjectOption(value: string | undefined, label: string): Record<string, unknown> {
   if (!value?.trim()) throw codeError("VALIDATION", `${label} is required.`);
   let parsed: unknown;
@@ -1422,14 +1687,30 @@ function sanitizeRisk(value: unknown): Record<string, unknown> {
     residualImpact: row.residualImpact,
     residualLikelihood: row.residualLikelihood,
     residualRating: row.residualRating,
+    archivedAt: row.archivedAt || null,
     controls: Array.isArray(row.controls)
       ? row.controls.map((control) => {
           const c = control && typeof control === "object" ? (control as Record<string, unknown>) : {};
-          return { title: c.title };
+          const controlType = c.controlType && typeof c.controlType === "object" ? (c.controlType as Record<string, unknown>) : {};
+          return {
+            id: c.id || null,
+            title: c.title || controlType.title || null,
+            status: c.status || null,
+          };
         })
       : [],
     updatedAt: row.updatedAt,
   };
+}
+
+function controlIdsOfRisk(row: Record<string, unknown>): string[] {
+  if (!Array.isArray(row.controls)) return [];
+  return row.controls
+    .map((control) => {
+      const c = control && typeof control === "object" ? (control as Record<string, unknown>) : {};
+      return typeof c.id === "string" ? c.id : "";
+    })
+    .filter(Boolean);
 }
 
 async function describeEvidenceUpload(file: string, opts: EvidenceUploadOptions): Promise<EvidenceUploadDescription> {

@@ -193,6 +193,18 @@ export class OneleetApiClient {
     return this.request(`/api/v1/tenants/${requireTenantId(tenantId)}/access-reviews`);
   }
 
+  async getAccessReview(accessReviewId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/access-reviews/${requireId(accessReviewId, "access review id")}`);
+  }
+
+  async markAccessReviewVendorReviewed(accessReviewVendorId: string, body: FormData): Promise<unknown> {
+    return this.request(`/api/v1/access-review-vendors/${requireId(accessReviewVendorId, "access review vendor id")}/mark-as-reviewed`, undefined, {
+      method: "POST",
+      body,
+      bodyType: "form",
+    });
+  }
+
   async listDomains(tenantId = this.tenantId): Promise<Record<string, unknown>> {
     return this.request(`/api/v1/tenants/${requireTenantId(tenantId)}/domains`);
   }
@@ -213,6 +225,12 @@ export class OneleetApiClient {
     return this.request(`/api/v1/risks/${requireId(riskId, "risk id")}`, undefined, {
       method: "PATCH",
       body,
+    });
+  }
+
+  async archiveRisk(riskId: string): Promise<unknown> {
+    return this.request(`/api/v1/risks/${requireId(riskId, "risk id")}`, undefined, {
+      method: "DELETE",
     });
   }
 
