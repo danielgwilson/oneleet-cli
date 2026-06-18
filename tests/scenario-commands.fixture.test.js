@@ -11,6 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, "..");
 const cliPath = path.join(packageRoot, "dist", "cli.js");
 const tenantId = "00000000-0000-4000-8000-000000000001";
+const monitorId = "00000000-0000-4000-8000-000000000101";
 const fakeCookie = "synthetic-cookie-do-not-leak";
 const feedbackControlId = "00000000-0000-4000-8000-000000000101";
 const uuidPattern = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i;
@@ -268,6 +269,35 @@ test("controls feedback traverses control detail rows and redacts free-text feed
     assert.equal("id" in payload.data.rows[0].evidenceRequests[0], false);
     assertSafeSummaryOutput(result.stdout, "controls feedback");
     assertRequiredPathsHit(server.requests, [tenantPath("/controls/program"), `/api/v1/controls/${feedbackControlId}`]);
+  } finally {
+    await server.close();
+    await rm(tempConfigHome, { recursive: true, force: true });
+  }
+});
+
+test("monitor refresh uses a local ref and redacts upstream identifiers", async () => {
+  const server = await startFixtureServer();
+  const tempConfigHome = await mkdtemp(path.join(os.tmpdir(), "oneleet-cli-refresh-test-"));
+
+  try {
+    const result = await runCli(["monitors", "refresh", "monitor-001", "--json"], fixtureEnv(server.url, tempConfigHome));
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
+
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.data.triggered, true);
+    assert.deepEqual(payload.data.selector, { mode: "ref", ref: "monitor-001", hasId: true });
+    assert.equal(payload.data.wait.reason, "not-requested");
+    assert.equal(payload.data.before.ref, "monitor-001");
+    assert.equal(payload.data.after.ref, "monitor-001");
+    assertSafeSummaryOutput(result.stdout, "monitors refresh");
+
+    assert.ok(server.requests.includes(`/api/v1/monitors/${monitorId}/rerun`), "expected monitor rerun endpoint to be called");
+    assert.ok(
+      server.requestLog.find((entry) => entry.method === "POST" && entry.pathname === `/api/v1/monitors/${monitorId}/rerun`),
+      "expected monitor rerun endpoint to use POST",
+    );
   } finally {
     await server.close();
     await rm(tempConfigHome, { recursive: true, force: true });
@@ -545,7 +575,7 @@ function fixtureFor(pathname) {
     [tenantPath("/monitors")]: {
       rows: [
         {
-          id: "monitor-1",
+          id: monitorId,
           status: "ALERTING",
           monitorType: { name: "Synthetic vulnerability monitor" },
           controlSummaries: [{ title: "Vulnerabilities remediated", ownerEmail: "ada@example.test" }],
@@ -564,6 +594,7 @@ function fixtureFor(pathname) {
         },
       ],
     },
+    [`/api/v1/monitors/${monitorId}/rerun`]: { accepted: true, latestRunQueued: true, id: "00000000-0000-4000-8000-000000000102" },
     [tenantPath("/members")]: {
       rows: [
         { id: "member-1", status: "ACTIVE", role: "ADMIN", name: "Grace Hopper", email: "grace@example.test" },
@@ -766,10 +797,12 @@ function fixtureFor(pathname) {
 
 async function startFixtureServer() {
   const requests = [];
+  const requestLog = [];
   const unexpectedPaths = [];
   const server = http.createServer((request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
     requests.push(url.pathname);
+    requestLog.push({ method: request.method, pathname: url.pathname });
     const fixture = fixtureFor(url.pathname);
     if (!fixture) {
       unexpectedPaths.push(url.pathname);
@@ -788,6 +821,7 @@ async function startFixtureServer() {
   return {
     url: `http://127.0.0.1:${address.port}`,
     requests,
+    requestLog,
     unexpectedPaths,
     close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
   };

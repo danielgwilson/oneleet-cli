@@ -4,10 +4,11 @@ This matrix maps the current Oneleet agent scenarios to the commands exposed by
 `oneleet-cli`. It is based on the current `README.md`, packaged skill, and V1
 contract.
 
-This is not full Oneleet private API coverage. The CLI is a read-only,
+This is not full Oneleet private API coverage. The CLI is a read-first,
 private-surface adapter for the current agent workflows. Detail pages, nested
-relationships, private API drift detection, and all mutations remain out of
-scope unless added by a separate decision.
+relationships, and private API drift detection remain out of scope unless added
+by a separate decision. V1 mutations are limited to explicit typed workflow
+commands with narrow safety gates.
 
 ## Grade Key
 
@@ -30,7 +31,7 @@ scope unless added by a separate decision.
 | Security remediation operations | `security remediation-queue`, `attack-surface summary`, `attack-surface issues --limit <n>`, `attack-surface scans --limit <n>`, `code-security scan`, `code-security settings`, `code-security repositories`, `pentests active-request`, `domains list`, `integrations list`, `controls list`, `controls checks`, `monitors list`, `monitors get`, `monitors controls`, `monitors rerun`, `monitors set-enabled`, `monitors snooze`, `monitors unsnooze`, `monitors set-config`, `monitors update-assets-ignore-status` | A- for remediation lane triage, B for monitor execution/verification | `attack-surface issue get <id>`, redacted target labels, `attack-surface targets`, `attack-surface services`, code-security finding/detail commands, pentest history/findings, and typed remediation owner fields. | Aggregate queue has a runtime safety gate. Monitor writes are dry-run by default and require `--write --confirm <monitor-id>`. No scan launch, finding acknowledgement, or pentest mutation commands. |
 | Trust center and customer security packet | `trust readiness`, `trust config`, `trust documents`, `trust document-requests`, `trust faqs`, `trust security-issues`, `reports list`, `hipaa report` | A- for internal readiness triage, C for public/customer proof | Public trust-center validation, report/document safe metadata, safe downloads/manifests, customer security packet builder, and external sharing checks. | Aggregate readiness report has a runtime safety gate. Trust rows summarize sensitive URLs/files/details by default. |
 | Uncovered private API reads | `api get /api/v1/... --unsafe-raw --json` | C | Promote recurring paths into typed commands with summaries, pagination, validation, and tests. | Escape hatch only. Requires `--unsafe-raw`, emits raw private API payloads, and should not be used for normal report workflows. Any report dependency on `api get` is a typed-coverage gap. |
-| Mutations and administrative actions | `evidence upload`, `evidence link-control`, `evidence link-vendor`, `policies set-audience`, `risks update`, `monitors rerun`, `monitors set-enabled`, `monitors snooze`, `monitors unsnooze`, `monitors set-config`, `monitors update-assets-ignore-status` | B | Separate decision needed before invites, access-review creation, report generation, trust-center publication, attack-surface scan launch, finding acknowledgement, or control-check unlink actions. | Writes are dry-run by default and require exact `--write --confirm ...`. Do not add new write commands without typed route discovery, validation, tests, and explicit approval. |
+| Mutations and administrative actions | `evidence upload`, `evidence link-control`, `evidence link-vendor`, `policies set-audience`, `access-reviews mark-empty-vendors-reviewed`, `risks update`, `risks archive`, `risks link-controls`, `monitors refresh`, `monitors rerun`, `monitors set-enabled`, `monitors snooze`, `monitors unsnooze`, `monitors set-config`, `monitors update-assets-ignore-status` | B | Separate decision needed before invites, access-review creation, report generation, trust-center publication, attack-surface scan launch, finding acknowledgement, or control-check unlink actions. | Writes are dry-run by default and require exact `--write --confirm ...`. `monitors refresh` accepts local refs and does not print upstream monitor ids. Do not add new write commands without typed route discovery, validation, tests, and explicit approval. |
 
 ## Publishability Read
 

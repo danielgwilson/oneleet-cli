@@ -153,22 +153,27 @@ export function summarizeMonitors(raw: any): unknown {
   if (!raw || !Array.isArray(raw.rows)) return raw;
   return {
     ...raw,
-    rows: raw.rows.map((row: any, index: number) => ({
-      ...safeRowMeta("monitor", index, row),
-      status: row.status,
-      isEnabled: row.isEnabled,
-      statusChangedAt: row.statusChangedAt || null,
-      monitorType: row.monitorType?.name || null,
-      controls: Array.isArray(row.controlSummaries) ? row.controlSummaries.map((control: any) => control.title).filter(Boolean) : [],
-      assets: {
-        count: row.stats?.assets?.count ?? null,
-        failingCount: row.stats?.assets?.failingCount ?? null,
-        passingCount: row.stats?.assets?.passingCount ?? null,
-        percentPassing: row.stats?.assets?.percentPassing ?? null,
-      },
-      latestRunStatus: row.latestRun?.status || null,
-      currentStateStatus: row.currentState?.status || null,
-    })),
+    rows: raw.rows.map((row: any, index: number) => summarizeMonitorRow(row, index)),
+  };
+}
+
+export function summarizeMonitorRow(row: any, index: number): unknown {
+  return {
+    ...safeRowMeta("monitor", index, row),
+    status: row.status,
+    isEnabled: row.isEnabled,
+    statusChangedAt: row.statusChangedAt || null,
+    monitorType: row.monitorType?.name || null,
+    rerunDisabled: row.monitorType?.rerunDisabled ?? null,
+    controls: Array.isArray(row.controlSummaries) ? row.controlSummaries.map((control: any) => control.title).filter(Boolean) : [],
+    assets: {
+      count: row.stats?.assets?.count ?? null,
+      failingCount: row.stats?.assets?.failingCount ?? null,
+      passingCount: row.stats?.assets?.passingCount ?? null,
+      percentPassing: row.stats?.assets?.percentPassing ?? null,
+    },
+    latestRunStatus: row.latestRun?.status || null,
+    currentStateStatus: row.currentState?.status || null,
   };
 }
 

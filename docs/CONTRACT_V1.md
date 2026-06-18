@@ -93,14 +93,16 @@ machine-local absolute paths.
 - attack-surface summary, issues, and scans
 - arbitrary read-only `/api/v1/...` GET paths through `api get`
 
-## V1 supported writes
+## V1 supported mutations
 
 Write commands are dry-run by default and require exact `--write --confirm ...`
 confirmation before sending a mutation:
 
 - evidence upload and evidence-to-control/vendor linking
 - policy signature-audience updates
-- risk updates
+- access-review empty-vendor mark-as-reviewed updates
+- risk updates, risk archive, and risk-to-control linking
+- `monitors refresh <monitor-ref>` using a safe local ref from `monitors list`
 - monitor rerun
 - monitor enable/disable
 - monitor snooze/unsnooze
@@ -118,7 +120,8 @@ unlink route.
 - `people list` summarizes rows by default; pass `--raw` for upstream rows.
 - `evidence list` summarizes rows by default; pass `--raw` for upstream rows.
 - `security-training progress` summarizes rows by default; pass `--raw` for upstream rows.
-- `whoami`, `tenant get`, `frameworks list`, `controls list`, `controls checks`, `controls feedback`, `monitors list`, `monitors get`, `monitors controls`, `vendors list`, `domains list`, `integrations list`, `policies list`, `access-reviews list`, `risk-assessments list`, `reports list`, trust-center row commands, `pentests active-request`, `code-security scan`, `code-security repositories`, `attack-surface issues`, and `attack-surface scans` summarize by default where upstream rows may expose identity, tenant, domain, URL, file, or raw finding details. Pass `--raw` only for narrow local debugging where available.
+- `whoami`, `tenant get`, `frameworks list`, `controls list`, `controls checks`, `controls feedback`, `monitors list`, `monitors get`, `monitors controls`, `monitors refresh`, `vendors list`, `domains list`, `integrations list`, `policies list`, `access-reviews list`, `risk-assessments list`, `reports list`, trust-center row commands, `pentests active-request`, `code-security scan`, `code-security repositories`, `attack-surface issues`, and `attack-surface scans` summarize by default where upstream rows may expose identity, tenant, domain, URL, file, or raw finding details. Pass `--raw` only for narrow local debugging where available.
+- Evidence and risk write workflow outputs may include the affected upstream IDs needed for follow-up writes, but must not print cookies, raw tenant exports, local paths, or unrequested raw payloads.
 - Default summarized list rows expose local `ref` values and `hasId` booleans instead of raw upstream IDs. These refs are stable only for that command output.
 - `controls feedback` defaults to controls with `NEEDS_CHANGES` status, fetches control detail rows, redacts sensitive patterns from reviewer/evidence-request free text, and omits upstream IDs unless explicitly run with `--show-ids`.
 - `controls checks` and `monitors controls` omit upstream relationship IDs unless explicitly run with `--show-ids`.
