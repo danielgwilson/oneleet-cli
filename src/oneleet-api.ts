@@ -62,12 +62,70 @@ export class OneleetApiClient {
     return this.request(`/api/v1/tenants/${requireTenantId(tenantId)}/monitors`);
   }
 
+  async getMonitor(monitorId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}`);
+  }
+
+  async listMonitorControls(monitorId: string): Promise<Record<string, unknown> | unknown[]> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/controls`);
+  }
+
   async rerunMonitor(monitorId: string): Promise<unknown> {
-    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/rerun`, undefined, { method: "POST" });
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/rerun`, undefined, {
+      method: "POST",
+    });
+  }
+
+  async updateMonitorEnabled(monitorId: string, body: RequestBody): Promise<unknown> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/enabled`, undefined, {
+      method: "POST",
+      body,
+    });
+  }
+
+  async snoozeMonitor(monitorId: string, body: RequestBody): Promise<unknown> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/snooze`, undefined, {
+      method: "POST",
+      body,
+    });
+  }
+
+  async unsnoozeMonitor(monitorId: string): Promise<unknown> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/unsnooze`, undefined, {
+      method: "POST",
+    });
+  }
+
+  async updateMonitorConfig(monitorId: string, body: RequestBody): Promise<unknown> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/config`, undefined, {
+      method: "PATCH",
+      body,
+    });
+  }
+
+  async updateMonitorAssetsIgnoreStatus(monitorId: string, body: RequestBody): Promise<unknown> {
+    return this.request(`/api/v1/monitors/${requireId(monitorId, "monitor id")}/update-assets-ignore-status`, undefined, {
+      method: "POST",
+      body,
+    });
   }
 
   async listControls(tenantId = this.tenantId): Promise<Record<string, unknown>> {
     return this.request(`/api/v1/tenants/${requireTenantId(tenantId)}/controls/program`);
+  }
+
+  async getControl(controlId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/controls/${requireId(controlId, "control id")}`);
+  }
+
+  async listControlChecks(controlId: string): Promise<Record<string, unknown> | unknown[]> {
+    return this.request(`/api/v1/controls/${requireId(controlId, "control id")}/checks`);
+  }
+
+  async requestControlReview(controlId: string): Promise<unknown> {
+    return this.request(`/api/v1/controls/${requireId(controlId, "control id")}/request-review`, undefined, {
+      method: "POST",
+    });
   }
 
   async listMembers(tenantId = this.tenantId): Promise<Record<string, unknown>> {
@@ -116,12 +174,35 @@ export class OneleetApiClient {
     return this.request("/api/v1/policy-types");
   }
 
+  async getPolicy(policyId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/policies/${requireId(policyId, "policy id")}`);
+  }
+
+  async updatePolicy(policyId: string, body: RequestBody): Promise<unknown> {
+    return this.request(`/api/v1/policies/${requireId(policyId, "policy id")}`, undefined, {
+      method: "PATCH",
+      body,
+    });
+  }
+
   async listFrameworks(tenantId = this.tenantId): Promise<Record<string, unknown>> {
     return this.request(`/api/v1/tenants/${requireTenantId(tenantId)}/tenant-compliance-frameworks`);
   }
 
   async listAccessReviews(tenantId = this.tenantId): Promise<Record<string, unknown>> {
     return this.request(`/api/v1/tenants/${requireTenantId(tenantId)}/access-reviews`);
+  }
+
+  async getAccessReview(accessReviewId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/access-reviews/${requireId(accessReviewId, "access review id")}`);
+  }
+
+  async markAccessReviewVendorReviewed(accessReviewVendorId: string, body: FormData): Promise<unknown> {
+    return this.request(`/api/v1/access-review-vendors/${requireId(accessReviewVendorId, "access review vendor id")}/mark-as-reviewed`, undefined, {
+      method: "POST",
+      body,
+      bodyType: "form",
+    });
   }
 
   async listDomains(tenantId = this.tenantId): Promise<Record<string, unknown>> {
@@ -144,6 +225,12 @@ export class OneleetApiClient {
     return this.request(`/api/v1/risks/${requireId(riskId, "risk id")}`, undefined, {
       method: "PATCH",
       body,
+    });
+  }
+
+  async archiveRisk(riskId: string): Promise<unknown> {
+    return this.request(`/api/v1/risks/${requireId(riskId, "risk id")}`, undefined, {
+      method: "DELETE",
     });
   }
 

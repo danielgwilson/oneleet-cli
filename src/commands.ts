@@ -35,6 +35,8 @@ import {
   summarizeAttackSurfaceScans,
   summarizeCodeRepositories,
   summarizeCodeScan,
+  summarizeControlChecks,
+  summarizeControlFeedback,
   summarizeControls,
   summarizeCurrentUser,
   summarizeDomains,
@@ -43,6 +45,7 @@ import {
   summarizeIntegrations,
   summarizeMonitorRow,
   summarizeMembers,
+  summarizeMonitorControls,
   summarizeMonitors,
   summarizePentestRequest,
   summarizePolicies,
@@ -282,65 +285,227 @@ export function buildProgram(): Command {
         }),
     );
   
-  const monitors = new Command("monitors").description("Monitor commands");
-  monitors
-    .command("list")
-    .option("--tenant-id <id>", "Tenant id override")
-    .option("--raw", "Return full upstream monitor rows instead of summarized rows")
-    .option("--json", "Print JSON envelope")
-    .action(async (opts: TenantOptions & { raw?: boolean }) => {
-      await runJsonAction(async () => {
-        const config = await requireConfig(opts);
-        const data = await clientFor(config).listMonitors(opts.tenantId || config.tenantId);
-        return opts.raw ? data : summarizeMonitors(data);
-      }, opts);
-    });
-  monitors
-    .command("refresh")
-    .argument("<monitor>", "Local monitor ref from `monitors list`, for example monitor-014")
-    .description("Trigger a Oneleet monitor rerun using a safe local monitor ref")
-    .option("--tenant-id <id>", "Tenant id override")
-    .option("--wait <seconds>", "Poll for a completed latest run for up to N seconds", "0")
-    .option("--json", "Print JSON envelope")
-    .action(async (monitor: string, opts: TenantOptions & { wait: string }) => {
-      await runJsonAction(async () => {
-        const waitSeconds = parseWaitSeconds(opts.wait);
-        const config = await requireConfig(opts);
-        const tenantId = tenantIdFor(opts, config);
-        const client = clientFor(config);
-        const monitorRows = rowsFromMonitorList(await client.listMonitors(tenantId));
-        const target = resolveMonitorForRefresh(monitor, monitorRows);
-        if (target.row?.monitorType?.rerunDisabled === true) {
-          throw codeError("CHECK_FAILED", "This monitor type reports rerunDisabled=true.");
-        }
+  program
+    .command("monitors")
+    .description("Monitor commands")
+    .addCommand(
+      new Command("list")
+        .option("--tenant-id <id>", "Tenant id override")
+        .option("--raw", "Return full upstream monitor rows instead of summarized rows")
+        .option("--json", "Print JSON envelope")
+        .action(async (opts: TenantOptions & { raw?: boolean }) => {
+          await runJsonAction(async () => {
+            const config = await requireConfig(opts);
+            const data = await clientFor(config).listMonitors(opts.tenantId || config.tenantId);
+            return opts.raw ? data : summarizeMonitors(data);
+          }, opts);
+        }),
+    )
+    .addCommand(
+      new Command("get")
+        .argument("<monitor-id>", "Monitor UUID")
+        .option("--raw", "Return full upstream monitor detail instead of a sanitized detail")
+        .option("--json", "Print JSON envelope")
+        .action(async (monitorId: string, opts: JsonOptions & { raw?: boolean }) => {
+          await runJsonAction(async () => {
+            const client = clientFor(await requireConfig(opts));
+            const data = await client.getMonitor(monitorId);
+            return opts.raw ? data : sanitizeMonitor(data);
+          }, opts);
+        }),
+    )
+    .addCommand(
+      new Command("controls")
+        .argument("<monitor-id>", "Monitor UUID")
+        .option("--raw", "Return full upstream linked-control rows instead of summarized rows")
+        .option("--show-ids", "Include raw control IDs for follow-up writes")
+        .option("--json", "Print JSON envelope")
+        .action(async (monitorId: string, opts: JsonOptions & { raw?: boolean; showIds?: boolean }) => {
+          await runJsonAction(async () => {
+            const client = clientFor(await requireConfig(opts));
+            const data = await client.listMonitorControls(monitorId);
+            return opts.raw ? data : summarizeMonitorControls(data, { showIds: Boolean(opts.showIds) });
+          }, opts);
+        }),
+    )
+    .addCommand(
+      new Command("rerun")
+        .description("Trigger a monitor rerun. Dry-run by default; real writes require --write and --confirm <monitor-id>.")
+        .argument("<monitor-id>", "Monitor UUID")
+        .option("--write", "Perform the rerun. Without this flag, prints a dry-run preview only.")
+        .option("--confirm <monitor-id>", "Required with --write; must equal the monitor id")
+        .option("--json", "Print JSON envelope")
+        .action(async (monitorId: string, opts: MonitorWriteOptions) => {
+          await runJsonAction(async () => {
+            const normalizedMonitorId = requireUuid(monitorId, "monitor id");
+            const plan = { dryRun: !opts.write, writeRequired: "--write --confirm " + normalizedMonitorId, monitorId: normalizedMonitorId, action: "rerun" };
+            if (!opts.write) return plan;
+            requireWriteConfirmation(opts.confirm, normalizedMonitorId);
+            const client = clientFor(await requireConfig(opts));
+            await client.rerunMonitor(normalizedMonitorId);
+            return { ...plan, dryRun: false, monitor: sanitizeMonitor(unwrapData(await client.getMonitor(normalizedMonitorId))) };
+          }, opts);
+        }),
+    )
+    .addCommand(
+      new Command("set-enabled")
+        .description("Enable or disable a monitor. Dry-run by default; real writes require --write and --confirm <monitor-id>.")
+        .argument("<monitor-id>", "Monitor UUID")
+        .requiredOption("--enabled <true|false>", "Desired enabled state")
+        .option("--disabled-reason <value>", "Required by Oneleet UI flow when disabling")
+        .option("--review-remind-at <iso-date>", "Optional review reminder timestamp when disabling")
+        .option("--write", "Perform the update. Without this flag, prints a dry-run preview only.")
+        .option("--confirm <monitor-id>", "Required with --write; must equal the monitor id")
+        .option("--json", "Print JSON envelope")
+        .action(async (monitorId: string, opts: MonitorSetEnabledOptions) => {
+          await runJsonAction(async () => {
+            const normalizedMonitorId = requireUuid(monitorId, "monitor id");
+            const patch = buildMonitorEnabledPatch(opts);
+            const plan = {
+              dryRun: !opts.write,
+              writeRequired: "--write --confirm " + normalizedMonitorId,
+              monitorId: normalizedMonitorId,
+              patch,
+            };
+            if (!opts.write) return plan;
+            requireWriteConfirmation(opts.confirm, normalizedMonitorId);
+            const client = clientFor(await requireConfig(opts));
+            await client.updateMonitorEnabled(normalizedMonitorId, patch);
+            return { ...plan, dryRun: false, monitor: sanitizeMonitor(unwrapData(await client.getMonitor(normalizedMonitorId))) };
+          }, opts);
+        }),
+    )
+    .addCommand(
+      new Command("snooze")
+        .description("Snooze a monitor. Dry-run by default; real writes require --write and --confirm <monitor-id>.")
+        .argument("<monitor-id>", "Monitor UUID")
+        .requiredOption("--until <iso-date>", "Snooze until timestamp")
+        .option("--reason <value>", "Snooze reason")
+        .option("--write", "Perform the snooze. Without this flag, prints a dry-run preview only.")
+        .option("--confirm <monitor-id>", "Required with --write; must equal the monitor id")
+        .option("--json", "Print JSON envelope")
+        .action(async (monitorId: string, opts: MonitorSnoozeOptions) => {
+          await runJsonAction(async () => {
+            const normalizedMonitorId = requireUuid(monitorId, "monitor id");
+            const patch = buildMonitorSnoozePatch(opts);
+            const plan = { dryRun: !opts.write, writeRequired: "--write --confirm " + normalizedMonitorId, monitorId: normalizedMonitorId, patch };
+            if (!opts.write) return plan;
+            requireWriteConfirmation(opts.confirm, normalizedMonitorId);
+            const client = clientFor(await requireConfig(opts));
+            await client.snoozeMonitor(normalizedMonitorId, patch);
+            return { ...plan, dryRun: false, monitor: sanitizeMonitor(unwrapData(await client.getMonitor(normalizedMonitorId))) };
+          }, opts);
+        }),
+    )
+    .addCommand(
+      new Command("unsnooze")
+        .description("Unsnooze a monitor. Dry-run by default; real writes require --write and --confirm <monitor-id>.")
+        .argument("<monitor-id>", "Monitor UUID")
+        .option("--write", "Perform the unsnooze. Without this flag, prints a dry-run preview only.")
+        .option("--confirm <monitor-id>", "Required with --write; must equal the monitor id")
+        .option("--json", "Print JSON envelope")
+        .action(async (monitorId: string, opts: MonitorWriteOptions) => {
+          await runJsonAction(async () => {
+            const normalizedMonitorId = requireUuid(monitorId, "monitor id");
+            const plan = { dryRun: !opts.write, writeRequired: "--write --confirm " + normalizedMonitorId, monitorId: normalizedMonitorId, action: "unsnooze" };
+            if (!opts.write) return plan;
+            requireWriteConfirmation(opts.confirm, normalizedMonitorId);
+            const client = clientFor(await requireConfig(opts));
+            await client.unsnoozeMonitor(normalizedMonitorId);
+            return { ...plan, dryRun: false, monitor: sanitizeMonitor(unwrapData(await client.getMonitor(normalizedMonitorId))) };
+          }, opts);
+        }),
+    )
+    .addCommand(
+      new Command("set-config")
+        .description("Patch monitor configuration JSON. Dry-run by default; real writes require --write and --confirm <monitor-id>.")
+        .argument("<monitor-id>", "Monitor UUID")
+        .requiredOption("--config-json <json>", "JSON object body accepted by Oneleet monitor config")
+        .option("--write", "Perform the update. Without this flag, prints a dry-run preview only.")
+        .option("--confirm <monitor-id>", "Required with --write; must equal the monitor id")
+        .option("--json", "Print JSON envelope")
+        .action(async (monitorId: string, opts: MonitorSetConfigOptions) => {
+          await runJsonAction(async () => {
+            const normalizedMonitorId = requireUuid(monitorId, "monitor id");
+            const patch = parseJsonObjectOption(opts.configJson, "--config-json");
+            const plan = { dryRun: !opts.write, writeRequired: "--write --confirm " + normalizedMonitorId, monitorId: normalizedMonitorId, patch };
+            if (!opts.write) return plan;
+            requireWriteConfirmation(opts.confirm, normalizedMonitorId);
+            const client = clientFor(await requireConfig(opts));
+            await client.updateMonitorConfig(normalizedMonitorId, patch);
+            return { ...plan, dryRun: false, monitor: sanitizeMonitor(unwrapData(await client.getMonitor(normalizedMonitorId))) };
+          }, opts);
+        }),
+    )
+    .addCommand(
+      new Command("update-assets-ignore-status")
+        .description("Ignore or unignore monitor assets. Dry-run by default; real writes require --write and --confirm <monitor-id>.")
+        .argument("<monitor-id>", "Monitor UUID")
+        .option("--ignore-asset-id <id>", "Asset instance UUID to ignore; repeatable", collect, [])
+        .option("--unignore-asset-id <id>", "Asset instance UUID to re-monitor; repeatable", collect, [])
+        .option("--reason <value>", "Reason to apply to newly ignored assets")
+        .option("--write", "Perform the update. Without this flag, prints a dry-run preview only.")
+        .option("--confirm <monitor-id>", "Required with --write; must equal the monitor id")
+        .option("--json", "Print JSON envelope")
+        .action(async (monitorId: string, opts: MonitorAssetIgnoreOptions) => {
+          await runJsonAction(async () => {
+            const normalizedMonitorId = requireUuid(monitorId, "monitor id");
+            const patch = buildMonitorAssetIgnorePatch(opts);
+            const plan = { dryRun: !opts.write, writeRequired: "--write --confirm " + normalizedMonitorId, monitorId: normalizedMonitorId, patch };
+            if (!opts.write) return plan;
+            requireWriteConfirmation(opts.confirm, normalizedMonitorId);
+            const client = clientFor(await requireConfig(opts));
+            await client.updateMonitorAssetsIgnoreStatus(normalizedMonitorId, patch);
+            return { ...plan, dryRun: false, monitor: sanitizeMonitor(unwrapData(await client.getMonitor(normalizedMonitorId))) };
+          }, opts);
+        }),
+    )
+    .addCommand(
+      new Command("refresh")
+        .argument("<monitor>", "Local monitor ref from `monitors list`, for example monitor-014")
+        .description("Trigger a Oneleet monitor rerun using a safe local monitor ref")
+        .option("--tenant-id <id>", "Tenant id override")
+        .option("--wait <seconds>", "Poll for a completed latest run for up to N seconds", "0")
+        .option("--json", "Print JSON envelope")
+        .action(async (monitor: string, opts: TenantOptions & { wait: string }) => {
+          await runJsonAction(async () => {
+            const waitSeconds = parseWaitSeconds(opts.wait);
+            const config = await requireConfig(opts);
+            const tenantId = tenantIdFor(opts, config);
+            const client = clientFor(config);
+            const monitorRows = rowsFromMonitorList(await client.listMonitors(tenantId));
+            const target = resolveMonitorForRefresh(monitor, monitorRows);
+            if (target.row?.monitorType?.rerunDisabled === true) {
+              throw codeError("CHECK_FAILED", "This monitor type reports rerunDisabled=true.");
+            }
 
-        const beforeRunKey = monitorRunKey(target.row);
-        await client.rerunMonitor(target.id);
+            const beforeRunKey = monitorRunKey(target.row);
+            await client.rerunMonitor(target.id);
 
-        const waitStartedAt = Date.now();
-        const waitResult = await readMonitorAfterRefresh(client, tenantId, target.id, beforeRunKey, waitSeconds);
-        const afterRow = waitResult.row || target.row;
-        const afterIndex = waitResult.index ?? target.index;
+            const waitStartedAt = Date.now();
+            const waitResult = await readMonitorAfterRefresh(client, tenantId, target.id, beforeRunKey, waitSeconds);
+            const afterRow = waitResult.row || target.row;
+            const afterIndex = waitResult.index ?? target.index;
 
-        return {
-          triggered: true,
-          selector: {
-            mode: "ref",
-            ref: target.ref,
-            hasId: true,
-          },
-          wait: {
-            requestedSeconds: waitSeconds,
-            completed: waitResult.completed,
-            reason: waitResult.reason,
-            elapsedSeconds: Math.round((Date.now() - waitStartedAt) / 1000),
-          },
-          before: summarizeMonitorRow(target.row, target.index),
-          after: summarizeMonitorRow(afterRow, afterIndex),
-        };
-      }, opts);
-    });
-  program.addCommand(monitors);
+            return {
+              triggered: true,
+              selector: {
+                mode: "ref",
+                ref: target.ref,
+                hasId: true,
+              },
+              wait: {
+                requestedSeconds: waitSeconds,
+                completed: waitResult.completed,
+                reason: waitResult.reason,
+                elapsedSeconds: Math.round((Date.now() - waitStartedAt) / 1000),
+              },
+              before: summarizeMonitorRow(target.row, target.index),
+              after: summarizeMonitorRow(afterRow, afterIndex),
+            };
+          }, opts);
+        }),
+    );
   
   program
     .command("controls")
@@ -355,6 +520,78 @@ export function buildProgram(): Command {
             const config = await requireConfig(opts);
             const data = await clientFor(config).listControls(opts.tenantId || config.tenantId);
             return opts.raw ? data : summarizeControls(data);
+          }, opts);
+        }),
+    )
+    .addCommand(
+      new Command("checks")
+        .description("List monitor/manual checks attached to a control")
+        .argument("<control-id>", "Control UUID")
+        .option("--raw", "Return full upstream check rows instead of summarized rows")
+        .option("--show-ids", "Include raw check and monitor IDs for follow-up writes")
+        .option("--json", "Print JSON envelope")
+        .action(async (controlId: string, opts: JsonOptions & { raw?: boolean; showIds?: boolean }) => {
+          await runJsonAction(async () => {
+            const client = clientFor(await requireConfig(opts));
+            const data = await client.listControlChecks(controlId);
+            return opts.raw ? data : summarizeControlChecks(data, { showIds: Boolean(opts.showIds) });
+          }, opts);
+        }),
+    )
+    .addCommand(
+      new Command("feedback")
+        .description("Traverse matching controls and return sanitized reviewer feedback and evidence-request details")
+        .option("--tenant-id <id>", "Tenant id override")
+        .option("--status <status>", "Control status to include; repeatable. Defaults to NEEDS_CHANGES. Use ALL to disable status filtering.", collect, [])
+        .option("--limit <n>", "Maximum matching controls to traverse", "100")
+        .option("--show-ids", "Include raw control and evidence-request IDs for follow-up writes")
+        .option("--json", "Print JSON envelope")
+        .action(async (opts: ControlFeedbackOptions) => {
+          await runJsonAction(async () => {
+            const limit = parsePositiveInteger(opts.limit, "--limit");
+            const statuses = normalizeControlFeedbackStatuses(opts.status);
+            const config = await requireConfig(opts);
+            const client = clientFor(config);
+            const controls = rowsOf(await client.listControls(opts.tenantId || config.tenantId)) as Record<string, unknown>[];
+            const matching = controls.filter((row) => !statuses || statuses.has(String(row.status || "").toUpperCase()));
+            const selected = matching.slice(0, limit);
+            const details = await Promise.all(selected.map((row) => client.getControl(stringField(row, "id", "control id"))));
+            return {
+              statusFilter: statuses ? Array.from(statuses).sort() : ["ALL"],
+              totalMatching: matching.length,
+              returned: details.length,
+              truncated: matching.length > details.length,
+              rows: details.map((row, index) => summarizeControlFeedback(row, index, { showIds: Boolean(opts.showIds) })),
+            };
+          }, opts);
+        }),
+    )
+    .addCommand(
+      new Command("request-review")
+        .description("Request Oneleet review for a control. Dry-run by default; real writes require --write and --confirm <control-id>.")
+        .argument("<control-id>", "Control UUID")
+        .option("--write", "Perform the review request. Without this flag, prints a dry-run preview only.")
+        .option("--confirm <control-id>", "Required with --write; must equal the control id")
+        .option("--json", "Print JSON envelope")
+        .action(async (controlId: string, opts: ControlReviewWriteOptions) => {
+          await runJsonAction(async () => {
+            const normalizedControlId = requireUuid(controlId, "control id");
+            const plan = {
+              dryRun: !opts.write,
+              writeRequired: "--write --confirm " + normalizedControlId,
+              controlId: normalizedControlId,
+              action: "request-review",
+            };
+            if (!opts.write) return plan;
+            requireWriteConfirmation(opts.confirm, normalizedControlId);
+            const client = clientFor(await requireConfig(opts));
+            await client.requestControlReview(normalizedControlId);
+            const after = unwrapData(await client.getControl(normalizedControlId));
+            return {
+              ...plan,
+              dryRun: false,
+              control: summarizeControlFeedback(after, 0, { showIds: true }),
+            };
           }, opts);
         }),
     );
@@ -558,6 +795,45 @@ export function buildProgram(): Command {
         .action(async (opts: JsonOptions) => {
           await runJsonAction(async () => clientFor(await requireConfig(opts)).listPolicyTypes(), opts);
         }),
+    )
+    .addCommand(
+      new Command("set-audience")
+        .description("Set a policy's signature audience. Dry-run by default; real writes require --write and --confirm <policy-id>.")
+        .argument("<policy-id>", "Policy UUID")
+        .option("--audience <value>", "Audience enum: EVERYONE, EMPLOYEES, CONTRACTORS, GROUPS")
+        .option("--group-id <id>", "Group UUID to include (only with --audience GROUPS); repeatable. Omit all to require no signers.", collect, [])
+        .option("--write", "Perform the update. Without this flag, prints a dry-run preview only.")
+        .option("--confirm <policy-id>", "Required with --write; must equal the policy id being updated")
+        .option("--json", "Print JSON envelope")
+        .action(async (policyId: string, opts: PolicySetAudienceOptions) => {
+          await runJsonAction(async () => {
+            const config = await requireConfig(opts);
+            const client = clientFor(config);
+            const before = unwrapData(await client.getPolicy(policyId));
+            const patch = buildPolicyAudiencePatch(opts);
+            if (!opts.write) {
+              return {
+                dryRun: true,
+                writeRequired: "--write --confirm " + policyId,
+                policyId,
+                before: sanitizePolicy(before),
+                patch,
+              };
+            }
+            if (opts.confirm !== policyId) {
+              throw codeError("VALIDATION", "--write requires --confirm to exactly match the policy id.");
+            }
+            await client.updatePolicy(policyId, patch);
+            const after = unwrapData(await client.getPolicy(policyId));
+            return {
+              dryRun: false,
+              policyId,
+              patch,
+              before: sanitizePolicy(before),
+              after: sanitizePolicy(after),
+            };
+          }, opts);
+        }),
     );
   
   program
@@ -590,6 +866,44 @@ export function buildProgram(): Command {
             const config = await requireConfig(opts);
             const data = await clientFor(config).listAccessReviews(opts.tenantId || config.tenantId);
             return opts.raw ? data : summarizeAccessReviews(data);
+          }, opts);
+        }),
+    )
+    .addCommand(
+      new Command("mark-empty-vendors-reviewed")
+        .description("Mark pending access-review vendors with no detected accounts as reviewed. Dry-run by default.")
+        .argument("<access-review-id>", "Access review UUID")
+        .option("--note <value>", "Reviewer note to attach to each mark-as-reviewed action")
+        .option("--show-ids", "Include access-review vendor IDs in target summaries")
+        .option("--write", "Perform the updates. Without this flag, prints a dry-run preview only.")
+        .option("--confirm <access-review-id>", "Required with --write; must equal the access review id")
+        .option("--json", "Print JSON envelope")
+        .action(async (accessReviewId: string, opts: AccessReviewMarkEmptyVendorsOptions) => {
+          await runJsonAction(async () => {
+            const normalizedAccessReviewId = requireUuid(accessReviewId, "access review id");
+            const note = accessReviewMarkReviewedNote(opts);
+            const client = clientFor(await requireConfig(opts));
+            const before = unwrapData(await client.getAccessReview(normalizedAccessReviewId));
+            const selection = selectEmptyAccessReviewVendors(before);
+            const plan = describeEmptyAccessReviewVendorSelection(before, normalizedAccessReviewId, selection, note, Boolean(opts.showIds));
+
+            if (!opts.write) return { ...plan, dryRun: true, writeRequired: "--write --confirm " + normalizedAccessReviewId };
+            if (opts.confirm !== normalizedAccessReviewId) {
+              throw codeError("VALIDATION", "--write requires --confirm to exactly match the access review id.");
+            }
+
+            for (const target of selection.targets) {
+              await client.markAccessReviewVendorReviewed(target.id, buildAccessReviewMarkReviewedForm(note));
+            }
+
+            const after = unwrapData(await client.getAccessReview(normalizedAccessReviewId));
+            const afterSelection = selectEmptyAccessReviewVendors(after);
+            return {
+              ...plan,
+              dryRun: false,
+              writtenCount: selection.targets.length,
+              after: describeEmptyAccessReviewVendorSelection(after, normalizedAccessReviewId, afterSelection, note, Boolean(opts.showIds)),
+            };
           }, opts);
         }),
     );
@@ -698,6 +1012,92 @@ export function buildProgram(): Command {
           dryRun: false,
           riskId,
           patch,
+          before: sanitizeRisk(before),
+          after: sanitizeRisk(after),
+        };
+      }, opts);
+    });
+  risks
+    .command("archive")
+    .description("Archive a Oneleet risk. Dry-run by default; real writes require --write and --confirm <risk-id>.")
+    .argument("<risk-id>", "Risk UUID")
+    .option("--write", "Perform the archive. Without this flag, prints a dry-run preview only.")
+    .option("--confirm <risk-id>", "Required with --write; must equal the risk id being archived")
+    .option("--json", "Print JSON envelope")
+    .action(async (riskId: string, opts: RiskArchiveOptions) => {
+      await runJsonAction(async () => {
+        requireUuid(riskId, "risk id");
+        const config = await requireConfig(opts);
+        const client = clientFor(config);
+        const before = await client.getRisk(riskId);
+        if (!opts.write) {
+          return {
+            dryRun: true,
+            writeRequired: "--write --confirm " + riskId,
+            riskId,
+            before: sanitizeRisk(before),
+          };
+        }
+        if (opts.confirm !== riskId) {
+          throw codeError("VALIDATION", "--write requires --confirm to exactly match the risk id.");
+        }
+        const result = await client.archiveRisk(riskId);
+        const after = await client.getRisk(riskId).catch(() => null);
+        return {
+          dryRun: false,
+          riskId,
+          result,
+          before: sanitizeRisk(before),
+          after: after ? sanitizeRisk(after) : null,
+        };
+      }, opts);
+    });
+  risks
+    .command("link-controls")
+    .description("Append control links to a Oneleet risk. Dry-run by default; real writes require --write and --confirm <risk-id>.")
+    .argument("<risk-id>", "Risk UUID")
+    .option("--control-id <id>", "Control UUID to link; repeatable", collect, [])
+    .option("--replace", "Replace existing risk control links instead of appending")
+    .option("--write", "Perform the update. Without this flag, prints a dry-run preview only.")
+    .option("--confirm <risk-id>", "Required with --write; must equal the risk id being updated")
+    .option("--json", "Print JSON envelope")
+    .action(async (riskId: string, opts: RiskLinkControlsOptions) => {
+      await runJsonAction(async () => {
+        requireUuid(riskId, "risk id");
+        const controlIds = uniqueUuidList(opts.controlId || [], "control id");
+        if (controlIds.length === 0) throw codeError("VALIDATION", "Provide at least one --control-id.");
+        const config = await requireConfig(opts);
+        const client = clientFor(config);
+        const before = await client.getRisk(riskId);
+        const beforeRow = unwrapData(before);
+        const existingControlIds = opts.replace ? [] : controlIdsOfRisk(beforeRow);
+        const nextControlIds = uniqueIds([...existingControlIds, ...controlIds]);
+        const patch = { controls: nextControlIds.map((id) => ({ id })) };
+        const summary = {
+          addedControlIds: controlIds.filter((id) => !existingControlIds.includes(id)),
+          existingControlCount: existingControlIds.length,
+          nextControlCount: nextControlIds.length,
+          replace: Boolean(opts.replace),
+        };
+        if (!opts.write) {
+          return {
+            dryRun: true,
+            writeRequired: "--write --confirm " + riskId,
+            riskId,
+            summary,
+            before: sanitizeRisk(before),
+            patch,
+          };
+        }
+        if (opts.confirm !== riskId) {
+          throw codeError("VALIDATION", "--write requires --confirm to exactly match the risk id.");
+        }
+        await client.updateRisk(riskId, patch);
+        const after = await client.getRisk(riskId);
+        return {
+          dryRun: false,
+          riskId,
+          summary,
           before: sanitizeRisk(before),
           after: sanitizeRisk(after),
         };
@@ -914,6 +1314,13 @@ export function buildProgram(): Command {
   return program;
 }
 
+type PolicySetAudienceOptions = JsonOptions & {
+  audience?: string;
+  groupId?: string[];
+  write?: boolean;
+  confirm?: string;
+};
+
 type RiskUpdateOptions = JsonOptions & {
   title?: string;
   description?: string;
@@ -925,6 +1332,18 @@ type RiskUpdateOptions = JsonOptions & {
   likelihood?: string;
   residualImpact?: string;
   residualLikelihood?: string;
+  write?: boolean;
+  confirm?: string;
+};
+
+type RiskArchiveOptions = JsonOptions & {
+  write?: boolean;
+  confirm?: string;
+};
+
+type RiskLinkControlsOptions = JsonOptions & {
+  controlId?: string[];
+  replace?: boolean;
   write?: boolean;
   confirm?: string;
 };
@@ -954,6 +1373,50 @@ type EvidenceLinkVendorOptions = JsonOptions & {
   confirm?: string;
 };
 
+type MonitorWriteOptions = JsonOptions & {
+  write?: boolean;
+  confirm?: string;
+};
+
+type MonitorSetEnabledOptions = MonitorWriteOptions & {
+  enabled: string;
+  disabledReason?: string;
+  reviewRemindAt?: string;
+};
+
+type MonitorSnoozeOptions = MonitorWriteOptions & {
+  until: string;
+  reason?: string;
+};
+
+type MonitorSetConfigOptions = MonitorWriteOptions & {
+  configJson: string;
+};
+
+type MonitorAssetIgnoreOptions = MonitorWriteOptions & {
+  ignoreAssetId?: string[];
+  unignoreAssetId?: string[];
+  reason?: string;
+};
+
+type ControlFeedbackOptions = TenantOptions & {
+  status?: string[];
+  limit: string;
+  showIds?: boolean;
+};
+
+type ControlReviewWriteOptions = JsonOptions & {
+  write?: boolean;
+  confirm?: string;
+};
+
+type AccessReviewMarkEmptyVendorsOptions = JsonOptions & {
+  note?: string;
+  showIds?: boolean;
+  write?: boolean;
+  confirm?: string;
+};
+
 type EvidenceUploadDescription = {
   fileName: string;
   sizeBytes: number;
@@ -961,6 +1424,25 @@ type EvidenceUploadDescription = {
   contents: Uint8Array;
 };
 
+type AccessReviewVendorTarget = {
+  id: string;
+  status: string | null;
+  accountCount: number;
+  reviewedAtPresent: boolean;
+};
+
+type AccessReviewEmptyVendorSelection = {
+  vendorCount: number;
+  zeroAccountVendorCount: number;
+  alreadyReviewedZeroAccountVendorCount: number;
+  skippedWithAccountsCount: number;
+  missingIdCount: number;
+  targets: AccessReviewVendorTarget[];
+};
+
+const DEFAULT_EMPTY_ACCESS_REVIEW_VENDOR_NOTE =
+  "No detected account-level access in Oneleet at review time; marked not applicable for access certification.";
+const ALLOWED_POLICY_AUDIENCES = new Set(["EVERYONE", "EMPLOYEES", "CONTRACTORS", "GROUPS"]);
 const ALLOWED_RISK_RESPONSES = new Set(["ACCEPT", "MITIGATE", "TRANSFER", "AVOID"]);
 const ALLOWED_RISK_LEVELS = new Set(["MINOR", "MODERATE", "MAJOR"]);
 const ALLOWED_RISK_LIKELIHOODS = new Set(["UNLIKELY", "LIKELY", "ALMOST_CERTAIN"]);
@@ -972,6 +1454,56 @@ const ALLOWED_RISK_CATEGORIES = new Set([
   "STRATEGIC_AND_MARKET",
   "FRAUD",
 ]);
+
+function normalizeControlFeedbackStatuses(values: string[] | undefined): Set<string> | null {
+  const normalized = (values && values.length > 0 ? values : ["NEEDS_CHANGES"]).map((value) => value.trim().toUpperCase()).filter(Boolean);
+  if (normalized.some((value) => value === "ALL")) return null;
+  return new Set(normalized);
+}
+
+function buildPolicyAudiencePatch(opts: PolicySetAudienceOptions): Record<string, unknown> {
+  if (opts.audience === undefined) {
+    throw codeError("VALIDATION", "--audience is required. Allowed: " + Array.from(ALLOWED_POLICY_AUDIENCES).join(", ") + ".");
+  }
+  const audience = opts.audience.trim().toUpperCase().replace(/-/g, "_");
+  if (!ALLOWED_POLICY_AUDIENCES.has(audience)) {
+    throw codeError("VALIDATION", "Invalid --audience value. Allowed: " + Array.from(ALLOWED_POLICY_AUDIENCES).join(", ") + ".");
+  }
+  const groupIds = (Array.isArray(opts.groupId) ? opts.groupId : []).map((value) => {
+    const trimmed = value.trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+      throw codeError("VALIDATION", "--group-id must be a UUID.");
+    }
+    return trimmed;
+  });
+  if (audience !== "GROUPS" && groupIds.length > 0) {
+    throw codeError("VALIDATION", "--group-id is only valid with --audience GROUPS.");
+  }
+  // For GROUPS we send the (possibly empty) group list; an empty list means no one is required to sign.
+  // For EVERYONE/EMPLOYEES/CONTRACTORS the server derives membership, so only the audience is sent.
+  return audience === "GROUPS" ? { audience, groupIds } : { audience };
+}
+
+function sanitizePolicy(value: unknown): Record<string, unknown> {
+  const row = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const version = row.currentVersion && typeof row.currentVersion === "object" ? (row.currentVersion as Record<string, unknown>) : {};
+  const countOf = (key: string): number | null => (Array.isArray(version[key]) ? (version[key] as unknown[]).length : null);
+  return {
+    id: row.id,
+    name: row.name,
+    audience: row.audience,
+    reviewerType: row.reviewerType,
+    types: Array.isArray(row.types)
+      ? row.types.map((type) => {
+          const t = type && typeof type === "object" ? (type as Record<string, unknown>) : {};
+          return t.name;
+        })
+      : [],
+    currentVersionApplicableMemberCount: countOf("applicableTenantMembers"),
+    currentVersionDirectSignatureCount: countOf("directSignatures") ?? countOf("applicableSignatures"),
+    updatedAt: row.updatedAt,
+  };
+}
 
 function buildRiskPatch(opts: RiskUpdateOptions): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
@@ -986,6 +1518,184 @@ function buildRiskPatch(opts: RiskUpdateOptions): Record<string, unknown> {
   setEnum(patch, "likelihood", opts.likelihood, ALLOWED_RISK_LIKELIHOODS);
   setEnum(patch, "residualLikelihood", opts.residualLikelihood, ALLOWED_RISK_LIKELIHOODS);
   return patch;
+}
+
+function buildMonitorEnabledPatch(opts: MonitorSetEnabledOptions): Record<string, unknown> {
+  const enabled = parseBooleanOption(opts.enabled, "--enabled");
+  const patch: Record<string, unknown> = { enabled };
+  if (opts.disabledReason !== undefined) setString(patch, "disabledReason", opts.disabledReason);
+  if (opts.reviewRemindAt !== undefined) patch.reviewRemindAt = parseIsoTimestamp(opts.reviewRemindAt, "--review-remind-at");
+  return patch;
+}
+
+function buildMonitorSnoozePatch(opts: MonitorSnoozeOptions): Record<string, unknown> {
+  const patch: Record<string, unknown> = {
+    snoozedUntil: parseIsoTimestamp(opts.until, "--until"),
+    reason: opts.reason?.trim() || "",
+  };
+  return patch;
+}
+
+function buildMonitorAssetIgnorePatch(opts: MonitorAssetIgnoreOptions): Record<string, unknown> {
+  const assetsToIgnore = uniqueUuidList(opts.ignoreAssetId || [], "ignore asset id");
+  const assetsToUnignore = uniqueUuidList(opts.unignoreAssetId || [], "unignore asset id");
+  if (assetsToIgnore.length === 0 && assetsToUnignore.length === 0) {
+    throw codeError("VALIDATION", "Provide at least one --ignore-asset-id or --unignore-asset-id.");
+  }
+  return {
+    assetsToIgnore,
+    assetsToUnignore,
+    reasonToIgnore: opts.reason?.trim() || "",
+  };
+}
+
+function accessReviewMarkReviewedNote(opts: AccessReviewMarkEmptyVendorsOptions): string {
+  const note = (opts.note ?? DEFAULT_EMPTY_ACCESS_REVIEW_VENDOR_NOTE).trim();
+  if (!note) throw codeError("VALIDATION", "--note cannot be empty.");
+  return note;
+}
+
+function buildAccessReviewMarkReviewedForm(note: string): FormData {
+  const form = new FormData();
+  form.append("note", note);
+  return form;
+}
+
+function selectEmptyAccessReviewVendors(value: unknown): AccessReviewEmptyVendorSelection {
+  const vendors = accessReviewVendorsOf(value);
+  const selection: AccessReviewEmptyVendorSelection = {
+    vendorCount: vendors.length,
+    zeroAccountVendorCount: 0,
+    alreadyReviewedZeroAccountVendorCount: 0,
+    skippedWithAccountsCount: 0,
+    missingIdCount: 0,
+    targets: [],
+  };
+
+  for (const vendor of vendors) {
+    const accountCount = accessReviewVendorAccountCount(vendor);
+    const reviewed = isAccessReviewVendorReviewed(vendor);
+    if (accountCount > 0) {
+      selection.skippedWithAccountsCount += 1;
+      continue;
+    }
+
+    selection.zeroAccountVendorCount += 1;
+    if (reviewed) {
+      selection.alreadyReviewedZeroAccountVendorCount += 1;
+      continue;
+    }
+
+    const id = typeof vendor.id === "string" ? vendor.id : "";
+    if (!id) {
+      selection.missingIdCount += 1;
+      continue;
+    }
+
+    selection.targets.push({
+      id,
+      status: typeof vendor.status === "string" ? vendor.status : null,
+      accountCount,
+      reviewedAtPresent: Boolean(vendor.reviewedAt),
+    });
+  }
+
+  return selection;
+}
+
+function accessReviewVendorsOf(value: unknown): Record<string, unknown>[] {
+  const row = unwrapData(value);
+  return Array.isArray(row.vendors) ? row.vendors.filter((vendor): vendor is Record<string, unknown> => Boolean(vendor && typeof vendor === "object")) : [];
+}
+
+function accessReviewVendorAccountCount(value: Record<string, unknown>): number {
+  return Array.isArray(value.accessReviewAccounts) ? value.accessReviewAccounts.length : 0;
+}
+
+function isAccessReviewVendorReviewed(value: Record<string, unknown>): boolean {
+  return value.status === "REVIEWED" || Boolean(value.reviewedAt);
+}
+
+function describeEmptyAccessReviewVendorSelection(
+  accessReview: unknown,
+  accessReviewId: string,
+  selection: AccessReviewEmptyVendorSelection,
+  note: string,
+  showIds: boolean,
+): Record<string, unknown> {
+  const row = unwrapData(accessReview);
+  return {
+    accessReviewId,
+    accessReviewStatus: row.status || null,
+    hasTitle: Boolean(row.title),
+    note,
+    summary: {
+      vendorCount: selection.vendorCount,
+      zeroAccountVendorCount: selection.zeroAccountVendorCount,
+      alreadyReviewedZeroAccountVendorCount: selection.alreadyReviewedZeroAccountVendorCount,
+      skippedWithAccountsCount: selection.skippedWithAccountsCount,
+      missingIdCount: selection.missingIdCount,
+      targetCount: selection.targets.length,
+    },
+    targets: selection.targets.map((target, index) => summarizeAccessReviewVendorTarget(target, index, showIds)),
+  };
+}
+
+function summarizeAccessReviewVendorTarget(target: AccessReviewVendorTarget, index: number, showIds: boolean): Record<string, unknown> {
+  const row: Record<string, unknown> = {
+    ref: `access-review-vendor-${String(index + 1).padStart(3, "0")}`,
+    hasId: Boolean(target.id),
+    status: target.status,
+    accountCount: target.accountCount,
+    reviewedAtPresent: target.reviewedAtPresent,
+  };
+  if (showIds) row.id = target.id;
+  return row;
+}
+
+function parseJsonObjectOption(value: string | undefined, label: string): Record<string, unknown> {
+  if (!value?.trim()) throw codeError("VALIDATION", `${label} is required.`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error: any) {
+    throw codeError("VALIDATION", `${label} must be valid JSON: ${error?.message || "parse failed"}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw codeError("VALIDATION", `${label} must be a JSON object.`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseBooleanOption(value: string | undefined, label: string): boolean {
+  const normalized = (value || "").trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes") return true;
+  if (normalized === "false" || normalized === "0" || normalized === "no") return false;
+  throw codeError("VALIDATION", `${label} must be true or false.`);
+}
+
+function parseIsoTimestamp(value: string | undefined, label: string): string {
+  const candidate = (value || "").trim();
+  if (!candidate) throw codeError("VALIDATION", `${label} cannot be empty.`);
+  const date = new Date(candidate);
+  if (Number.isNaN(date.getTime())) throw codeError("VALIDATION", `${label} must be an ISO-like date/time string.`);
+  return candidate;
+}
+
+function uniqueUuidList(ids: string[], label: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ids) {
+    const normalized = requireUuid(id, label);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function requireWriteConfirmation(confirm: string | undefined, expected: string): void {
+  if (confirm !== expected) throw codeError("VALIDATION", "--write requires --confirm to exactly match the monitor id.");
 }
 
 function setString(target: Record<string, unknown>, key: string, value: string | undefined): void {
@@ -1024,14 +1734,30 @@ function sanitizeRisk(value: unknown): Record<string, unknown> {
     residualImpact: row.residualImpact,
     residualLikelihood: row.residualLikelihood,
     residualRating: row.residualRating,
+    archivedAt: row.archivedAt || null,
     controls: Array.isArray(row.controls)
       ? row.controls.map((control) => {
           const c = control && typeof control === "object" ? (control as Record<string, unknown>) : {};
-          return { title: c.title };
+          const controlType = c.controlType && typeof c.controlType === "object" ? (c.controlType as Record<string, unknown>) : {};
+          return {
+            id: c.id || null,
+            title: c.title || controlType.title || null,
+            status: c.status || null,
+          };
         })
       : [],
     updatedAt: row.updatedAt,
   };
+}
+
+function controlIdsOfRisk(row: Record<string, unknown>): string[] {
+  if (!Array.isArray(row.controls)) return [];
+  return row.controls
+    .map((control) => {
+      const c = control && typeof control === "object" ? (control as Record<string, unknown>) : {};
+      return typeof c.id === "string" ? c.id : "";
+    })
+    .filter(Boolean);
 }
 
 async function describeEvidenceUpload(file: string, opts: EvidenceUploadOptions): Promise<EvidenceUploadDescription> {
@@ -1162,6 +1888,37 @@ function sanitizeEvidence(value: unknown): Record<string, unknown> {
     controlCount: Array.isArray(row.controlIds) ? row.controlIds.length : 0,
     vendorCount: Array.isArray(row.vendorIds) ? row.vendorIds.length : 0,
     createdAt: row.createdAt || null,
+    updatedAt: row.updatedAt || null,
+  };
+}
+
+function sanitizeMonitor(value: unknown): Record<string, unknown> {
+  const row = unwrapData(value);
+  const monitorType = row.monitorType && typeof row.monitorType === "object" ? (row.monitorType as Record<string, unknown>) : {};
+  const stats = row.stats && typeof row.stats === "object" ? (row.stats as Record<string, unknown>) : {};
+  const assets = stats.assets && typeof stats.assets === "object" ? (stats.assets as Record<string, unknown>) : {};
+  const latestRun = row.latestRun && typeof row.latestRun === "object" ? (row.latestRun as Record<string, unknown>) : {};
+  const currentState = row.currentState && typeof row.currentState === "object" ? (row.currentState as Record<string, unknown>) : {};
+  return {
+    id: row.id,
+    status: row.status || null,
+    isEnabled: row.isEnabled ?? row.enabled ?? null,
+    statusChangedAt: row.statusChangedAt || null,
+    monitorType: monitorType.name || null,
+    controlTitles: Array.isArray(row.controlSummaries)
+      ? row.controlSummaries
+          .map((control) => (control && typeof control === "object" ? (control as Record<string, unknown>).title : null))
+          .filter(Boolean)
+      : [],
+    assets: {
+      count: assets.count ?? null,
+      failingCount: assets.failingCount ?? null,
+      passingCount: assets.passingCount ?? null,
+      percentPassing: assets.percentPassing ?? null,
+    },
+    latestRunStatus: latestRun.status || null,
+    latestRunAt: latestRun.createdAt || latestRun.updatedAt || null,
+    currentStateStatus: currentState.status || null,
     updatedAt: row.updatedAt || null,
   };
 }
