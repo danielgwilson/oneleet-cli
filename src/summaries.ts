@@ -110,6 +110,45 @@ export function summarizeControls(raw: any): unknown {
   };
 }
 
+export function summarizeControlFeedback(raw: any, index: number, options: { showIds?: boolean } = {}): Record<string, unknown> {
+  const controlType = raw?.controlType && typeof raw.controlType === "object" ? raw.controlType : {};
+  const feedback = sanitizedFreeformText(raw?.reviewDetails);
+  const evidenceRequests = Array.isArray(raw?.evidenceRequests) ? raw.evidenceRequests : [];
+  const checks = Array.isArray(raw?.checks) ? raw.checks : [];
+  return {
+    ...safeRowMeta("control-feedback", index, raw),
+    ...(options.showIds ? { id: raw?.id || null } : {}),
+    title: controlType.title || raw?.title || null,
+    category: controlType.category || raw?.category || null,
+    status: raw?.status || null,
+    reviewStatus: raw?.reviewStatus || null,
+    reviewedAt: raw?.reviewedAt || null,
+    reviewRequestedAt: raw?.reviewRequestedAt || null,
+    hasReviewerName: Boolean(raw?.reviewerName),
+    hasFeedback: Boolean(feedback),
+    feedback,
+    frameworks: Array.isArray(raw?.tenantComplianceRequirements)
+      ? Array.from(new Set(raw.tenantComplianceRequirements.map((req: any) => req.frameworkName).filter(Boolean)))
+      : [],
+    references: Array.isArray(raw?.tenantComplianceRequirements)
+      ? raw.tenantComplianceRequirements.map((req: any) => req.referenceId).filter(Boolean)
+      : [],
+    checkCount: checks.length,
+    linkedEvidenceCount: Array.isArray(raw?.linkedEvidence) ? raw.linkedEvidence.length : Array.isArray(raw?.evidence) ? raw.evidence.length : 0,
+    evidenceRequestCount: evidenceRequests.length,
+    evidenceRequests: evidenceRequests.map((request: any, requestIndex: number) => ({
+      ...safeRowMeta("evidence-request", requestIndex, request),
+      ...(options.showIds ? { id: request?.id || null } : {}),
+      status: request?.status || null,
+      title: sanitizedFreeformText(request?.title),
+      description: sanitizedFreeformText(request?.description),
+      createdAt: request?.createdAt || null,
+      updatedAt: request?.updatedAt || null,
+      evidenceCount: Array.isArray(request?.evidence) ? request.evidence.length : 0,
+    })),
+  };
+}
+
 export function summarizeMonitors(raw: any): unknown {
   if (!raw || !Array.isArray(raw.rows)) return raw;
   return {
@@ -136,6 +175,81 @@ export function summarizeMonitorRow(row: any, index: number): unknown {
     latestRunStatus: row.latestRun?.status || null,
     currentStateStatus: row.currentState?.status || null,
   };
+}
+
+export function summarizeMonitorControls(raw: any, options: { showIds?: boolean } = {}): unknown {
+  const summarize = (row: any, index: number) => ({
+    ...safeRowMeta("monitor-control", index, row),
+    ...(options.showIds ? { id: row?.id || null } : {}),
+    title: row?.title || row?.controlType?.title || null,
+    category: row?.category || row?.controlType?.category || null,
+    status: row?.status || null,
+    reviewStatus: row?.reviewStatus || null,
+    checkSummary: summarizeCheckSummary(row?.checkSummary),
+    evidenceRequestCount: Array.isArray(row?.evidenceRequests) ? row.evidenceRequests.length : null,
+    evidenceCount: Array.isArray(row?.evidence) ? row.evidence.length : Array.isArray(row?.linkedEvidence) ? row.linkedEvidence.length : null,
+    references: Array.isArray(row?.tenantComplianceRequirements)
+      ? row.tenantComplianceRequirements.map((req: any) => req.referenceId).filter(Boolean)
+      : [],
+  });
+  if (Array.isArray(raw)) return raw.map(summarize);
+  if (!raw || !Array.isArray(raw.rows)) return raw;
+  return { ...raw, rows: raw.rows.map(summarize) };
+}
+
+export function summarizeControlChecks(raw: any, options: { showIds?: boolean } = {}): unknown {
+  const summarize = (row: any, index: number) => {
+    const monitor = row?.monitor && typeof row.monitor === "object" ? row.monitor : {};
+    const monitorType = monitor.monitorType && typeof monitor.monitorType === "object" ? monitor.monitorType : {};
+    return {
+      ...safeRowMeta("control-check", index, row),
+      ...(options.showIds ? { id: row?.id || null, monitorId: monitor.id || row?.monitorId || null } : {}),
+      type: row?.type || null,
+      status: row?.status || null,
+      enabled: row?.enabled ?? null,
+      monitorStatus: monitor.status || null,
+      monitorType: monitorType.name || row?.monitorType?.name || null,
+      lastRunAt: monitor.latestRun?.createdAt || monitor.latestRun?.updatedAt || row?.lastRunAt || null,
+    };
+  };
+  if (Array.isArray(raw)) return raw.map(summarize);
+  if (!raw || !Array.isArray(raw.rows)) return raw;
+  return { ...raw, rows: raw.rows.map(summarize) };
+}
+
+function sanitizedFreeformText(value: unknown): string | null {
+  const text = freeformText(value);
+  if (!text) return null;
+  const trimmed = text.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (!trimmed) return null;
+  return truncateText(redactSensitiveText(trimmed), 8000);
+}
+
+function freeformText(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(freeformText).filter(Boolean).join("\n\n") || null;
+  if (!value || typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  for (const key of ["feedback", "reviewDetails", "message", "reason", "details", "comment", "note", "description", "body", "text"]) {
+    const nested = freeformText(row[key]);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function redactSensitiveText(value: string): string {
+  return value
+    .replace(/oneleet-app=[^\s;]+/gi, "oneleet-app=[redacted]")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email-redacted]")
+    .replace(/https?:\/\/[^\s)]+/gi, "[url-redacted]")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "[id-redacted]")
+    .replace(/\/Users\/[A-Za-z0-9._-]+\/[^\s)]+/g, "[local-path-redacted]")
+    .replace(/\b[A-Za-z0-9][A-Za-z0-9_. -]*\.(?:csv|tsv|xlsx?|docx?|pdf|png|jpe?g|webp|har|zip)\b/gi, "[file-redacted]");
+}
+
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return value.slice(0, maxLength - 16).trimEnd() + " [truncated]";
 }
 
 export function summarizeVendors(raw: any): unknown {

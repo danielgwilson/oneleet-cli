@@ -11,8 +11,8 @@ can drift when Oneleet changes the app.
 - browser/CDP-assisted auth import
 - session health checks
 - current user and tenant reads
-- dashboard, HIPAA aggregate report, controls, monitors, evidence, policies, frameworks, people, vendors, domains, integrations, access reviews, risk assessments, security training, trust center, reports, pentests, code security, and attack-surface reads
-- guarded evidence writes for uploading file evidence to controls and linking existing evidence to controls or vendors
+- dashboard, HIPAA aggregate report, controls, sanitized control feedback traversal, monitors, evidence, policies, frameworks, people, vendors, domains, integrations, access reviews, risk assessments, security training, trust center, reports, pentests, code security, and attack-surface reads
+- guarded control review requests and evidence writes for uploading file evidence to controls and linking existing evidence to controls or vendors
 - guarded risk reads/updates for assessment triage
 - narrow `monitors refresh <monitor-ref>` rerun trigger for an existing monitor
 - read-only `/api/v1/...` escape hatch for uncovered Oneleet private API paths
@@ -109,8 +109,21 @@ oneleet vendor-risk report --json
 oneleet trust readiness --json
 oneleet security remediation-queue --json
 oneleet monitors list --json
+oneleet monitors get <monitor-id> --json
+oneleet monitors controls <monitor-id> --show-ids --json
 oneleet monitors refresh monitor-014 --wait 120 --json
+oneleet monitors rerun <monitor-id> --write --confirm <monitor-id> --json
+oneleet monitors set-enabled <monitor-id> --enabled false --disabled-reason "Reason" --write --confirm <monitor-id> --json
+oneleet monitors snooze <monitor-id> --until 2026-06-30T00:00:00Z --reason "Reason" --write --confirm <monitor-id> --json
+oneleet monitors unsnooze <monitor-id> --write --confirm <monitor-id> --json
+oneleet monitors set-config <monitor-id> --config-json '{"key":"value"}' --write --confirm <monitor-id> --json
+oneleet monitors update-assets-ignore-status <monitor-id> --ignore-asset-id <asset-instance-id> --reason "Reason" --write --confirm <monitor-id> --json
 oneleet controls list --json
+oneleet controls checks <control-id> --show-ids --json
+oneleet controls feedback --json
+oneleet controls feedback --status NEEDS_CHANGES --show-ids --json
+oneleet controls request-review <control-id> --json
+oneleet controls request-review <control-id> --write --confirm <control-id> --json
 oneleet evidence list --json
 oneleet evidence list --raw --json
 oneleet evidence get <evidence-id> --json
@@ -122,14 +135,23 @@ oneleet evidence link-vendor <evidence-id> --vendor-id <tenant-vendor-id> --json
 oneleet evidence link-vendor <evidence-id> --vendor-id <tenant-vendor-id> --write --confirm <evidence-id> --json
 oneleet policies list --json
 oneleet policies types --json
+oneleet policies set-audience <policy-id> --audience GROUPS --json
+oneleet policies set-audience <policy-id> --audience GROUPS --write --confirm <policy-id> --json
+oneleet policies set-audience <policy-id> --audience EVERYONE --write --confirm <policy-id> --json
 oneleet frameworks list --json
 oneleet access-reviews list --json
+oneleet access-reviews mark-empty-vendors-reviewed <access-review-id> --json
+oneleet access-reviews mark-empty-vendors-reviewed <access-review-id> --write --confirm <access-review-id> --json
 oneleet domains list --json
 oneleet integrations list --json
 oneleet risk-assessments list --json
 oneleet risks get <risk-id> --json
 oneleet risks update <risk-id> --response MITIGATE --response-details "Mitigation summary" --json
 oneleet risks update <risk-id> --response MITIGATE --response-details "Mitigation summary" --write --confirm <risk-id> --json
+oneleet risks archive <risk-id> --json
+oneleet risks archive <risk-id> --write --confirm <risk-id> --json
+oneleet risks link-controls <risk-id> --control-id <control-id> --json
+oneleet risks link-controls <risk-id> --control-id <control-id> --write --confirm <risk-id> --json
 oneleet security-training modules --json
 oneleet security-training progress --json
 oneleet security-training progress --raw --json
@@ -162,10 +184,11 @@ oneleet api get /api/v1/users/current --unsafe-raw --json
 - no raw HARs, screenshots, storage state, or full recon dumps in repo
 - `monitors refresh` accepts local `monitor-###` refs from `monitors list`; it resolves the upstream id internally and does not print upstream ids by default
 - people, evidence, and security-training progress output is summarized by default; use `--raw` only when you need full upstream rows
-- tenant, current-user, controls, monitors, vendors, domains, integrations, policies, access reviews, reports, trust-center rows, pentest requests, code-security rows, attack-surface issues, and attack-surface scans are also summarized by default where the upstream shape may contain sensitive or noisy details
+- tenant, current-user, controls, control feedback, monitors, vendors, domains, integrations, policies, access reviews, reports, trust-center rows, pentest requests, code-security rows, attack-surface issues, and attack-surface scans are also summarized by default where the upstream shape may contain sensitive or noisy details
 - default summarized list rows use local `ref` values and `hasId` booleans instead of raw upstream IDs; pass `--raw` only for short-lived local debugging
+- `controls feedback` defaults to `NEEDS_CHANGES`, traverses the control-detail endpoint, redacts sensitive patterns from reviewer/evidence-request free text, and omits raw IDs unless `--show-ids` is provided for follow-up writes
 - `coverage check`, `hipaa report`, `ops workforce-summary`, `vendor-risk report`, `trust readiness`, and `security remediation-queue` are intentionally aggregate/sanitized and avoid names, emails, cookies, URLs, UUID/internal IDs, and raw evidence filenames
-- evidence and risk write commands intentionally return the affected evidence/risk IDs needed for follow-up writes, but never print cookies
+- evidence, policy, risk, and monitor write commands intentionally return the affected IDs needed for follow-up writes, but never print cookies
 - `hipaa report` includes `data.completeness`; treat `sourceErrors`, `shapeErrors`, or `paginationGaps` as report caveats before drawing conclusions
 
 ## Evidence write workflow
@@ -202,6 +225,29 @@ Existing evidence can be linked without re-uploading:
 oneleet evidence link-control <evidence-id> --control-id <control-id> --write --confirm <evidence-id> --json
 oneleet evidence link-vendor <evidence-id> --vendor-id <tenant-vendor-id> --write --confirm <evidence-id> --json
 ```
+
+## Monitor write workflow
+
+Monitor writes expose the same private endpoints used by the Oneleet app for
+reruns, enable/disable, snooze/unsnooze, config patching, and asset
+ignore/unignore. They are dry-run by default and require exact monitor-id
+confirmation before sending a write:
+
+```bash
+oneleet monitors controls <monitor-id> --show-ids --json
+oneleet controls checks <control-id> --show-ids --json
+oneleet monitors rerun <monitor-id> --write --confirm <monitor-id> --json
+oneleet monitors update-assets-ignore-status <monitor-id> \
+  --ignore-asset-id <asset-instance-id> \
+  --reason "Documented exception" \
+  --write \
+  --confirm <monitor-id> \
+  --json
+```
+
+The current Oneleet frontend exposes control-check relationship reads
+(`controls checks`, `monitors controls`) but does not expose a typed
+monitor-control unlink route.
 
 ## Contract
 
